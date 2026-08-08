@@ -2,42 +2,68 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { X, Mic, MicOff, Settings2, Sparkles, CheckCheck } from "lucide-react";
+import {
+  X,
+  Mic,
+  MicOff,
+  Settings2,
+  Sparkles,
+  CheckCheck,
+  AlertTriangle,
+  Play,
+} from "lucide-react";
 import { VoiceOrb, type OrbState } from "@/components/voice/voice-orb";
 import { LiveFormPanel, type AnswerMap } from "@/components/voice/live-form-panel";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { getAllQuestions } from "@/lib/form-utils";
-import { scriptedAnswerFor } from "@/lib/voice-script";
+import { MicSession, speakText, transcribeAudio, interpretAnswer } from "@/lib/voice-client";
 import { cn } from "@/lib/utils";
-import type { FormDefinition } from "@/types";
+import type { FormDefinition, FormQuestion } from "@/types";
 
-function sleepFactory(cancelledRef: { current: boolean }, pausedRef: { current: boolean }) {
-  return (ms: number) =>
-    new Promise<void>((resolve) => {
-      const tick = () => {
-        if (cancelledRef.current) return resolve();
-        if (pausedRef.current) {
-          setTimeout(tick, 200);
-          return;
-        }
-        setTimeout(resolve, ms);
-      };
-      tick();
-    });
+const MAX_RETRIES = 2; // repeat the question up to this many times if unanswered
+const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
+
+const API_ERROR_MESSAGE =
+  "Voice services aren't responding. Make sure OPENAI_API_KEY and ANTHROPIC_API_KEY are set in web/.env.local, then restart the dev server. You can still fill out the form manually on the right.";
+
+function isPaused(pausedRef: { current: boolean }, cancelledRef: { current: boolean }) {
+  return new Promise<void>((resolve) => {
+    const check = () => {
+      if (cancelledRef.current || !pausedRef.current) return resolve();
+      setTimeout(check, 150);
+    };
+    check();
+  });
+}
+
+/** Chrome/Safari block audio.play() without a real click preceding it —
+ * calling this from inside the "Start" button's onClick unlocks autoplay
+ * for the rest of the tab, so later programmatic TTS playback isn't silently
+ * blocked (which otherwise looks exactly like "it isn't reading anything"). */
+function unlockAudioPlayback() {
+  try {
+    const a = new Audio();
+    a.play().catch(() => {});
+  } catch {
+    // ignore — best-effort unlock
+  }
 }
 
 export function VoiceExperience({ form }: { form: FormDefinition }) {
   const router = useRouter();
+  const [started, setStarted] = useState(false);
   const [phase, setPhase] = useState<"conversation" | "review" | "submitting">(
     "conversation"
   );
   const [orbState, setOrbState] = useState<OrbState>("speaking");
-  const [assistantText, setAssistantText] = useState("Getting ready…");
+  const [assistantText, setAssistantText] = useState("");
   const [userText, setUserText] = useState("");
   const [activeField, setActiveField] = useState<string | null>(null);
   const [answers, setAnswers] = useState<AnswerMap>({});
   const [paused, setPaused] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const pausedRef = useRef(paused);
   useEffect(() => {
@@ -45,61 +71,112 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
   }, [paused]);
 
   useEffect(() => {
+    if (!started) return;
+
     const cancelledRef = { current: false };
-    const sleep = sleepFactory(cancelledRef, pausedRef);
+    const mic = new MicSession();
+
+    async function speak(text: string) {
+      setOrbState("speaking");
+      setAssistantText(text);
+      setUserText("");
+      await isPaused(pausedRef, cancelledRef);
+      if (cancelledRef.current) return;
+      await speakText(text); // throws on failure — caller decides how to handle it
+    }
+
+    async function listenAndTranscribe(): Promise<string> {
+      setOrbState("listening");
+      await isPaused(pausedRef, cancelledRef);
+      if (cancelledRef.current) return "";
+      const clip = await mic.recordUntilSilence();
+      if (cancelledRef.current) return "";
+      setOrbState("thinking");
+      return transcribeAudio(clip); // throws on failure
+    }
+
+    async function askQuestion(q: FormQuestion): Promise<string | boolean | null> {
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (cancelledRef.current) return null;
+
+        await speak(attempt === 0 ? q.questionText : `Sorry, I didn't catch that. ${q.questionText}`);
+        if (cancelledRef.current) return null;
+
+        const transcript = await listenAndTranscribe();
+        if (cancelledRef.current) return null;
+
+        if (!transcript.trim()) continue; // genuine silence — repeat the question
+
+        setUserText(transcript);
+
+        const interpretation = await interpretAnswer({
+          question: q.questionText,
+          fieldType: q.fieldType,
+          options: q.options?.map((o) => o.value),
+          transcript,
+        });
+
+        if (!interpretation.needs_clarification) {
+          return interpretation.value;
+        }
+
+        // Low-confidence / ambiguous — confirm before committing.
+        await speak(interpretation.clarification_question ?? "Is that correct?");
+        if (cancelledRef.current) return null;
+        const confirmTranscript = await listenAndTranscribe();
+        if (cancelledRef.current) return null;
+        setUserText(confirmTranscript);
+
+        if (confirmTranscript.trim() && !NEGATIVE_RE.test(confirmTranscript)) {
+          return interpretation.value;
+        }
+        // treated as "no" (or unheard) — loop back and re-ask the question
+      }
+      return null; // gave up after MAX_RETRIES — leave unanswered, move on
+    }
 
     async function run() {
+      try {
+        await mic.init();
+      } catch {
+        setMicError(
+          "Microphone access was denied or unavailable. You can still fill out the form manually on the right."
+        );
+        setOrbState("idle");
+        return;
+      }
+
       const allQuestions = getAllQuestions(form);
       let local: AnswerMap = {};
 
-      await sleep(600);
+      try {
+        for (const q of allQuestions) {
+          if (cancelledRef.current) break;
+          if (
+            q.conditional &&
+            local[q.conditional.dependsOnFieldName] !== q.conditional.equals
+          ) {
+            continue;
+          }
 
-      for (const q of allQuestions) {
-        if (cancelledRef.current) return;
-        if (
-          q.conditional &&
-          local[q.conditional.dependsOnFieldName] !== q.conditional.equals
-        ) {
-          continue;
+          setActiveField(q.fieldName);
+          const value = await askQuestion(q);
+          if (cancelledRef.current) break;
+
+          if (value !== null) {
+            local = { ...local, [q.fieldName]: value };
+            setAnswers((prev) => ({ ...prev, [q.fieldName]: value }));
+          }
         }
-
-        setActiveField(q.fieldName);
-        setOrbState("speaking");
-        setAssistantText(q.questionText);
-        setUserText("");
-        await sleep(1400);
-        if (cancelledRef.current) return;
-
-        setOrbState("listening");
-        const scripted = scriptedAnswerFor(q, form.formId);
-        await sleep(1200);
-        if (cancelledRef.current) return;
-        setUserText(scripted.spoken);
-        await sleep(500);
-
-        setOrbState("thinking");
-        await sleep(550);
-        if (cancelledRef.current) return;
-
-        if (scripted.clarify) {
-          setOrbState("speaking");
-          setAssistantText(scripted.clarify);
-          setUserText("");
-          await sleep(1300);
-          if (cancelledRef.current) return;
-          setOrbState("listening");
-          await sleep(900);
-          setUserText("Yes, that's correct.");
-          await sleep(600);
-          setOrbState("thinking");
-          await sleep(400);
-          if (cancelledRef.current) return;
-        }
-
-        local = { ...local, [q.fieldName]: scripted.value };
-        setAnswers((prev) => ({ ...prev, [q.fieldName]: scripted.value }));
-        await sleep(550);
+      } catch (err) {
+        console.error("[voice] pipeline error", err);
+        setApiError(API_ERROR_MESSAGE);
+        setOrbState("idle");
+        mic.stop();
+        return;
       }
+
+      mic.stop();
 
       if (!cancelledRef.current) {
         setActiveField(null);
@@ -113,9 +190,26 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     run();
     return () => {
       cancelledRef.current = true;
+      mic.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.id]);
+  }, [started, form.id]);
+
+  // Manual-entry fallback: if voice never worked (mic denied, or the API
+  // routes errored), let the user complete the form by hand and unlock
+  // review once every required visible field is set.
+  useEffect(() => {
+    if ((!micError && !apiError) || phase !== "conversation") return;
+    const allQuestions = getAllQuestions(form);
+    const stillMissing = allQuestions.some((q) => {
+      const visible =
+        !q.conditional || answers[q.conditional.dependsOnFieldName] === q.conditional.equals;
+      const answered = answers[q.fieldName] !== undefined && answers[q.fieldName] !== "";
+      return visible && q.required && !answered;
+    });
+    if (!stillMissing) setPhase("review");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers, micError, apiError, phase]);
 
   const allQuestions = getAllQuestions(form);
   const visibleCount = allQuestions.filter(
@@ -138,6 +232,8 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       router.push("/entries");
     }
   }
+
+  const error = micError ?? apiError;
 
   const statusLabel =
     phase === "review"
@@ -183,57 +279,95 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
             }}
           />
 
-          <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-8 py-10">
-            <VoiceOrb state={phase === "review" ? "idle" : orbState} size={196} />
-
-            <div className="flex max-w-md flex-col items-center gap-3 text-center">
-              <p
-                key={assistantText}
-                className="animate-fade-in-up text-xl font-semibold leading-snug text-white"
-              >
-                {assistantText}
-              </p>
-              {userText && (
-                <p
-                  key={userText}
-                  className="animate-fade-in-up text-sm text-white/50"
-                >
-                  “{userText}”
+          {!started ? (
+            /* Tap-to-begin gate — the click both starts the session and
+               satisfies the browser's autoplay-needs-a-gesture requirement. */
+            <div className="relative flex flex-1 flex-col items-center justify-center gap-6 px-8 text-center">
+              <span className="flex size-16 items-center justify-center rounded-full border border-white/20 bg-white/5">
+                <Mic className="size-7 text-white/70" />
+              </span>
+              <div className="flex flex-col gap-2">
+                <h2 className="text-xl font-semibold">Ready when you are</h2>
+                <p className="max-w-xs text-sm text-white/60">
+                  Tap start, allow microphone access, and answer each question out loud.
                 </p>
+              </div>
+              <button
+                onClick={() => {
+                  unlockAudioPlayback();
+                  setStarted(true);
+                }}
+                className="flex items-center gap-2 rounded-full bg-teal px-6 py-3 text-sm font-semibold text-teal-foreground transition-transform active:scale-[0.98]"
+              >
+                <Play className="size-4" />
+                Start Voice Entry
+              </button>
+            </div>
+          ) : (
+            <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-8 py-10">
+              {error ? (
+                <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+                  <span className="flex size-14 items-center justify-center rounded-full bg-warning/20 text-warning">
+                    <AlertTriangle className="size-6" />
+                  </span>
+                  <p className="text-sm text-white/70">{error}</p>
+                </div>
+              ) : (
+                <VoiceOrb state={phase === "review" ? "idle" : orbState} size={196} />
+              )}
+
+              <div className="flex max-w-md flex-col items-center gap-3 text-center">
+                {!error && (
+                  <p
+                    key={assistantText}
+                    className="animate-fade-in-up text-xl font-semibold leading-snug text-white"
+                  >
+                    {assistantText}
+                  </p>
+                )}
+                {userText && !error && (
+                  <p key={userText} className="animate-fade-in-up text-sm text-white/50">
+                    “{userText}”
+                  </p>
+                )}
+              </div>
+
+              {!error && (
+                <span className="text-xs font-medium uppercase tracking-wide text-white/40">
+                  {paused ? "Paused" : statusLabel}
+                </span>
               )}
             </div>
-
-            <span className="text-xs font-medium uppercase tracking-wide text-white/40">
-              {paused ? "Paused" : statusLabel}
-            </span>
-          </div>
+          )}
 
           {/* Control bar */}
-          <div className="relative flex items-center justify-center gap-3 pb-8">
-            <button
-              onClick={() => router.push("/entries")}
-              className="flex size-11 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
-              aria-label="End session"
-            >
-              <X className="size-[18px]" />
-            </button>
-            <button
-              onClick={() => setPaused((p) => !p)}
-              className={cn(
-                "flex size-14 items-center justify-center rounded-full transition-colors",
-                paused ? "bg-white/15 text-white" : "bg-teal text-teal-foreground"
-              )}
-              aria-label={paused ? "Resume microphone" : "Mute microphone"}
-            >
-              {paused ? <MicOff className="size-6" /> : <Mic className="size-6" />}
-            </button>
-            <button
-              className="flex size-11 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
-              aria-label="Settings"
-            >
-              <Settings2 className="size-[18px]" />
-            </button>
-          </div>
+          {started && !error && (
+            <div className="relative flex items-center justify-center gap-3 pb-8">
+              <button
+                onClick={() => router.push("/entries")}
+                className="flex size-11 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+                aria-label="End session"
+              >
+                <X className="size-[18px]" />
+              </button>
+              <button
+                onClick={() => setPaused((p) => !p)}
+                className={cn(
+                  "flex size-14 items-center justify-center rounded-full transition-colors",
+                  paused ? "bg-white/15 text-white" : "bg-teal text-teal-foreground"
+                )}
+                aria-label={paused ? "Resume microphone" : "Mute microphone"}
+              >
+                {paused ? <MicOff className="size-6" /> : <Mic className="size-6" />}
+              </button>
+              <button
+                className="flex size-11 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+                aria-label="Settings"
+              >
+                <Settings2 className="size-[18px]" />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right: live form */}

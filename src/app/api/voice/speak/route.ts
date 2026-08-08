@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("[voice/speak] TTS request failed", err);
-    return NextResponse.json({ error: "Text-to-speech failed" }, { status: 502 });
+    const detail = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Text-to-speech failed", detail }, { status: 502 });
   }
 }

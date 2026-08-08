@@ -24,9 +24,6 @@ import type { FormDefinition, FormQuestion } from "@/types";
 const MAX_RETRIES = 2; // repeat the question up to this many times if unanswered
 const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
 
-const API_ERROR_MESSAGE =
-  "Voice services aren't responding. Make sure OPENAI_API_KEY and ANTHROPIC_API_KEY are set in web/.env.local, then restart the dev server. You can still fill out the form manually on the right.";
-
 function isPaused(pausedRef: { current: boolean }, cancelledRef: { current: boolean }) {
   return new Promise<void>((resolve) => {
     const check = () => {
@@ -170,7 +167,8 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         }
       } catch (err) {
         console.error("[voice] pipeline error", err);
-        setApiError(API_ERROR_MESSAGE);
+        const reason = err instanceof Error ? err.message : String(err);
+        setApiError(`${reason} — you can still fill out the form manually on the right.`);
         setOrbState("idle");
         mic.stop();
         return;

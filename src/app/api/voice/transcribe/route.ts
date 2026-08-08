@@ -36,6 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ transcript: result.text.trim() });
   } catch (err) {
     console.error("[voice/transcribe] Whisper request failed", err);
-    return NextResponse.json({ error: "Transcription failed" }, { status: 502 });
+    const detail = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Transcription failed", detail }, { status: 502 });
   }
 }

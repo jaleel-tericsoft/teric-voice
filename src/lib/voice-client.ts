@@ -8,6 +8,15 @@ export interface Interpretation {
   clarification_question: string | null;
 }
 
+/** Reads {error, detail} off a failed route response and throws a message
+ * specific enough to show directly in the UI (e.g. the real upstream
+ * OpenAI/Anthropic error), instead of a generic "request failed". */
+async function throwForFailedResponse(res: Response, fallback: string): Promise<never> {
+  const body = await res.json().catch(() => null);
+  const message = body?.detail || body?.error || fallback;
+  throw new Error(message);
+}
+
 /** Fetches TTS audio for `text` and plays it, resolving once playback ends. */
 export async function speakText(text: string, signal?: AbortSignal): Promise<void> {
   const res = await fetch("/api/voice/speak", {
@@ -16,7 +25,7 @@ export async function speakText(text: string, signal?: AbortSignal): Promise<voi
     body: JSON.stringify({ text }),
     signal,
   });
-  if (!res.ok) throw new Error("speak failed");
+  if (!res.ok) await throwForFailedResponse(res, "Text-to-speech request failed");
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -43,7 +52,7 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
   const form = new FormData();
   form.append("audio", blob, "answer.webm");
   const res = await fetch("/api/voice/transcribe", { method: "POST", body: form });
-  if (!res.ok) throw new Error("transcribe failed");
+  if (!res.ok) await throwForFailedResponse(res, "Transcription request failed");
   const data = await res.json();
   return data.transcript ?? "";
 }
@@ -59,7 +68,7 @@ export async function interpretAnswer(params: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
-  if (!res.ok) throw new Error("interpret failed");
+  if (!res.ok) await throwForFailedResponse(res, "Interpretation request failed");
   return res.json();
 }
 

@@ -105,6 +105,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(response.parsed_output);
   } catch (err) {
     console.error("[voice/interpret] Claude request failed", err);
-    return NextResponse.json({ error: "Interpretation failed" }, { status: 502 });
+    const detail = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Interpretation failed", detail }, { status: 502 });
   }
 }

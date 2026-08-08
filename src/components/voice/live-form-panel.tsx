@@ -90,7 +90,7 @@ function QuestionRow({
       ref={rowRef}
       className={cn(
         "animate-fade-in-up rounded-xl p-2.5 transition-colors",
-        active && "bg-lime/10 ring-2 ring-lime/70"
+        active && "bg-teal/8 ring-2 ring-teal/60"
       )}
     >
       <div className="mb-1.5 flex items-center gap-1.5">
@@ -99,8 +99,8 @@ function QuestionRow({
           {question.required && <span className="text-destructive"> *</span>}
         </span>
         {active ? (
-          <span className="flex items-center gap-1 text-[10px] font-medium text-lime-foreground">
-            <span className="size-1.5 animate-pulse rounded-full bg-lime" />
+          <span className="flex items-center gap-1 text-[10px] font-medium text-teal">
+            <span className="size-1.5 animate-pulse rounded-full bg-teal" />
             listening
           </span>
         ) : answered ? (
@@ -139,7 +139,7 @@ function FieldControl({
               className={cn(
                 "rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors",
                 selected
-                  ? "border-transparent bg-foreground text-background"
+                  ? "border-transparent bg-primary text-primary-foreground"
                   : "border-border text-muted-foreground hover:text-foreground"
               )}
             >

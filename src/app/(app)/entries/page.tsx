@@ -33,7 +33,7 @@ export default async function EntriesPage(props: PageProps<"/entries">) {
       </div>
 
       {/* Form tabs */}
-      <div className="flex w-fit items-center gap-1 rounded-full bg-muted p-1">
+      <div className="flex items-center gap-6 border-b border-border">
         {forms.map((form) => {
           const isActive = form.id === activeForm.id;
           return (
@@ -41,13 +41,16 @@ export default async function EntriesPage(props: PageProps<"/entries">) {
               key={form.id}
               href={`/entries?form=${form.formId}`}
               className={cn(
-                "rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                "relative -mb-px flex items-center pb-3 text-sm font-medium transition-colors",
                 isActive
-                  ? "bg-foreground text-background"
+                  ? "text-primary font-semibold"
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
               {form.name}
+              {isActive && (
+                <span className="absolute inset-x-0 -bottom-px h-[2px] rounded-full bg-lime" />
+              )}
             </Link>
           );
         })}

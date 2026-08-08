@@ -162,7 +162,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
           Exit
         </button>
         <div className="flex items-center gap-2 text-sm">
-          <Sparkles className="size-4 text-lime-foreground" />
+          <Sparkles className="size-4 text-lime" />
           <span className="font-semibold text-foreground">{form.name}</span>
           <span className="text-muted-foreground">· Voice Entry</span>
         </div>
@@ -174,12 +174,12 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       {/* Split panels */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         {/* Left: voice panel */}
-        <div className="relative flex flex-col overflow-hidden rounded-3xl bg-[#141414] text-white">
+        <div className="relative flex flex-col overflow-hidden rounded-3xl bg-[#0b1f33] text-white">
           <div
             className="pointer-events-none absolute inset-0 opacity-40"
             style={{
               background:
-                "radial-gradient(120% 90% at 50% -10%, rgba(255,255,255,0.08), transparent 60%)",
+                "radial-gradient(120% 90% at 50% -10%, rgba(255,255,255,0.06), transparent 60%)",
             }}
           />
 
@@ -221,7 +221,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
               onClick={() => setPaused((p) => !p)}
               className={cn(
                 "flex size-14 items-center justify-center rounded-full transition-colors",
-                paused ? "bg-white/15 text-white" : "bg-lime text-lime-foreground"
+                paused ? "bg-white/15 text-white" : "bg-teal text-teal-foreground"
               )}
               aria-label={paused ? "Resume microphone" : "Mute microphone"}
             >
@@ -264,7 +264,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
             <Button
               disabled={phase !== "review"}
               onClick={handleSubmit}
-              className="rounded-full"
+              className="rounded-full bg-teal text-teal-foreground hover:bg-[#18464d]"
             >
               {phase === "submitting" ? (
                 "Submitting…"

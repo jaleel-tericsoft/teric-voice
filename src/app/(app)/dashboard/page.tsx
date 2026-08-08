@@ -25,9 +25,9 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-6 pt-6">
       {/* Hero */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#7a4326] via-[#4a2a1c] to-[#241713] px-8 py-9 text-white">
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#102a43] via-[#0f2438] to-[#0b1f33] px-8 py-9 text-white">
         <div className="relative z-10 flex max-w-lg flex-col gap-4">
-          <span className="w-fit rounded-full bg-white/15 px-3 py-1 text-xs font-semibold tracking-wide uppercase backdrop-blur-sm">
+          <span className="w-fit rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide uppercase backdrop-blur-sm">
             Voice Assistant
           </span>
           <h1 className="text-3xl font-extrabold leading-tight tracking-tight">
@@ -39,13 +39,13 @@ export default function DashboardPage() {
           </p>
           <Link
             href="/voice/new?form=employee-information"
-            className="flex w-fit items-center gap-2 rounded-full bg-lime px-5 py-2.5 text-sm font-semibold text-lime-foreground transition-transform active:scale-[0.98]"
+            className="flex w-fit items-center gap-2 rounded-full bg-teal px-5 py-2.5 text-sm font-semibold text-teal-foreground transition-transform hover:bg-[#256b76] active:scale-[0.98]"
           >
             <Mic className="size-4" strokeWidth={2.5} />
             Start Voice Form
           </Link>
         </div>
-        <div className="pointer-events-none absolute -right-10 top-1/2 size-64 -translate-y-1/2 rounded-full bg-lime/20 blur-3xl" />
+        <div className="pointer-events-none absolute -right-10 top-1/2 size-64 -translate-y-1/2 rounded-full bg-[#1f5a63]/30 blur-3xl" />
         <div className="pointer-events-none absolute right-6 top-1/2 size-40 -translate-y-1/2 rounded-full border border-white/15" />
       </div>
 
@@ -142,9 +142,9 @@ export default function DashboardPage() {
         </div>
 
         {/* Form activity */}
-        <div className="rounded-2xl bg-secondary/60 p-5">
+        <div className="rounded-2xl border border-border/60 bg-muted p-5">
           <div className="mb-4 flex items-center gap-2">
-            <span className="flex size-6 items-center justify-center rounded-full bg-lime text-lime-foreground">
+            <span className="flex size-6 items-center justify-center rounded-full bg-primary text-primary-foreground">
               <Mic className="size-3" strokeWidth={2.5} />
             </span>
             <h2 className="text-[15px] font-semibold text-foreground">

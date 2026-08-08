@@ -9,19 +9,19 @@ const entryStatusConfig: Record<
   draft: { label: "Draft", className: "bg-muted text-muted-foreground" },
   in_progress: {
     label: "In Progress",
-    className: "bg-warning/15 text-warning",
+    className: "bg-info/10 text-info",
   },
   awaiting_review: {
     label: "Awaiting Review",
-    className: "bg-accent text-accent-foreground",
+    className: "bg-warning/15 text-warning",
   },
   submitted: {
     label: "Submitted",
-    className: "bg-foreground/8 text-foreground",
+    className: "bg-primary/10 text-primary",
   },
   pdf_generated: {
     label: "PDF Generated",
-    className: "bg-lime/40 text-lime-foreground",
+    className: "bg-lime/25 text-lime-foreground",
   },
   email_sent: {
     label: "Email Sent",

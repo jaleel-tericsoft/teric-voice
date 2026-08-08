@@ -47,7 +47,7 @@ export function EntriesTable({
     <div className="overflow-x-auto rounded-2xl border border-border/60">
       <Table>
         <TableHeader>
-          <TableRow className="border-border/60 hover:bg-transparent">
+          <TableRow className="border-border/60 bg-muted hover:bg-muted">
             <TableHead className="pl-4 text-xs font-semibold text-muted-foreground">
               Entry ID
             </TableHead>

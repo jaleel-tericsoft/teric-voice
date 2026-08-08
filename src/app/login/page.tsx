@@ -9,7 +9,7 @@ export default function LoginPage() {
     <div className="flex min-h-dvh w-full items-center justify-center bg-canvas p-3">
       <div className="grid w-full max-w-4xl grid-cols-1 overflow-hidden rounded-3xl bg-background shadow-sm ring-1 ring-black/[0.03] lg:grid-cols-2">
         {/* Brand side */}
-        <div className="relative hidden flex-col justify-between overflow-hidden bg-[#141414] p-10 text-white lg:flex">
+        <div className="relative hidden flex-col justify-between overflow-hidden bg-[#0b1f33] p-10 text-white lg:flex">
           <div
             className="pointer-events-none absolute inset-0 opacity-50"
             style={{

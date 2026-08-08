@@ -46,6 +46,10 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-teal: var(--teal);
+  --color-teal-foreground: var(--teal-foreground);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -56,98 +60,113 @@
 }
 
 :root {
-  /* Large, soft roundness system — base 20px */
-  --radius: 1.25rem;
+  /* UK automotive dealership palette — restrained navy / teal / gold / white.
+     Radius: 8-10px per color theme.md, cards near-flat. */
+  --radius: 0.625rem;
 
   /* Outer page canvas the two shell panels float on */
-  --canvas: oklch(0.95 0.006 80);
+  --canvas: #eef0f0;
 
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.19 0.007 75);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.19 0.007 75);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.19 0.007 75);
+  --background: #f7f7f5; /* Warm White */
+  --foreground: #17212b; /* Charcoal */
+  --card: #ffffff;
+  --card-foreground: #17212b;
+  --popover: #ffffff;
+  --popover-foreground: #17212b;
 
-  /* Chartreuse/lime accent — primary brand color from reference */
-  --primary: oklch(0.19 0.007 75);
-  --primary-foreground: oklch(0.98 0.01 100);
-  --lime: oklch(0.91 0.19 126);
-  --lime-foreground: oklch(0.17 0.03 126);
+  /* Primary = Deep Navy. "Lime" token repurposed to Champagne Gold — used
+     sparingly for indicators/icons/milestones, never large fills. */
+  --primary: #102a43;
+  --primary-foreground: #ffffff;
+  --lime: #b99a5b;
+  --lime-foreground: #4a3b1f;
 
-  --secondary: oklch(0.97 0.004 80);
-  --secondary-foreground: oklch(0.24 0.007 75);
-  --muted: oklch(0.96 0.005 80);
-  --muted-foreground: oklch(0.52 0.012 75);
-  --accent: oklch(0.95 0.05 126);
-  --accent-foreground: oklch(0.22 0.02 126);
+  /* Secondary BUTTON style per color theme.md: white surface, navy border+text.
+     Petrol Teal is kept separate — reserved sparingly for named "important
+     operational action" buttons (Start Voice Form, Confirm & Submit) and the
+     voice "Listening" state, never for ordinary secondary/utility actions. */
+  --secondary: #ffffff;
+  --secondary-foreground: #102a43;
+  --teal: #1f5a63;
+  --teal-foreground: #ffffff;
 
-  --success: oklch(0.62 0.15 155);
-  --success-foreground: oklch(0.98 0.01 155);
-  --warning: oklch(0.75 0.16 70);
-  --warning-foreground: oklch(0.2 0.02 70);
-  --destructive: oklch(0.6 0.21 25);
+  --muted: #f0f1ef; /* Soft Stone */
+  --muted-foreground: #52606d; /* Slate */
+  --accent: #eaf0f2; /* subtle navy-tinted hover */
+  --accent-foreground: #102a43;
 
-  --border: oklch(0.91 0.006 75);
-  --input: oklch(0.91 0.006 75);
-  --ring: oklch(0.82 0.16 126);
+  --success: #287d5a;
+  --success-foreground: #ffffff;
+  --warning: #b7791f;
+  --warning-foreground: #ffffff;
+  --info: #356a8a;
+  --info-foreground: #ffffff;
+  --destructive: #b23a3a;
 
-  --chart-1: oklch(0.91 0.19 126);
-  --chart-2: oklch(0.68 0.15 45);
-  --chart-3: oklch(0.6 0.02 75);
-  --chart-4: oklch(0.45 0.02 75);
-  --chart-5: oklch(0.3 0.01 75);
+  --border: #d9dedf; /* Cool Stone */
+  --input: #d9dedf;
+  --ring: #1f5a63;
 
-  /* Sidebar stays a fixed dark charcoal shell regardless of theme, per reference */
-  --sidebar: oklch(0.23 0.007 75);
-  --sidebar-foreground: oklch(0.93 0.006 80);
-  --sidebar-primary: oklch(0.14 0.006 75);
-  --sidebar-primary-foreground: oklch(0.91 0.19 126);
-  --sidebar-accent: oklch(0.29 0.008 75);
-  --sidebar-accent-foreground: oklch(0.96 0.005 80);
+  --chart-1: #102a43;
+  --chart-2: #1f5a63;
+  --chart-3: #b99a5b;
+  --chart-4: #52606d;
+  --chart-5: #287d5a;
+
+  /* Sidebar: Midnight Navy per color theme.md */
+  --sidebar: #0b1f33;
+  --sidebar-foreground: #e8edf1;
+  --sidebar-primary: #16324a; /* lighter navy surface for active item */
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #14293d;
+  --sidebar-accent-foreground: #f2f5f7;
   --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.82 0.16 126);
+  --sidebar-ring: #1f5a63;
 }
 
 .dark {
-  --canvas: oklch(0.16 0.006 75);
-  --background: oklch(0.19 0.007 75);
-  --foreground: oklch(0.96 0.005 80);
-  --card: oklch(0.22 0.007 75);
-  --card-foreground: oklch(0.96 0.005 80);
-  --popover: oklch(0.22 0.007 75);
-  --popover-foreground: oklch(0.96 0.005 80);
-  --primary: oklch(0.91 0.19 126);
-  --primary-foreground: oklch(0.17 0.03 126);
-  --lime: oklch(0.91 0.19 126);
-  --lime-foreground: oklch(0.17 0.03 126);
-  --secondary: oklch(0.28 0.007 75);
-  --secondary-foreground: oklch(0.96 0.005 80);
-  --muted: oklch(0.28 0.007 75);
-  --muted-foreground: oklch(0.68 0.01 75);
-  --accent: oklch(0.3 0.02 126);
-  --accent-foreground: oklch(0.95 0.03 126);
-  --success: oklch(0.62 0.15 155);
-  --success-foreground: oklch(0.98 0.01 155);
-  --warning: oklch(0.75 0.16 70);
-  --warning-foreground: oklch(0.2 0.02 70);
-  --destructive: oklch(0.7 0.19 25);
-  --border: oklch(1 0 0 / 10%);
+  --canvas: #0b1f33;
+  --background: #102a43;
+  --foreground: #eef1f3;
+  --card: #16324a;
+  --card-foreground: #eef1f3;
+  --popover: #16324a;
+  --popover-foreground: #eef1f3;
+  --primary: #eef1f3;
+  --primary-foreground: #102a43;
+  --lime: #b99a5b;
+  --lime-foreground: #4a3b1f;
+  --secondary: #16324a;
+  --secondary-foreground: #eef1f3;
+  --teal: #1f5a63;
+  --teal-foreground: #ffffff;
+  --muted: #1a3650;
+  --muted-foreground: #9fb0bd;
+  --accent: #1a3650;
+  --accent-foreground: #eef1f3;
+  --success: #287d5a;
+  --success-foreground: #ffffff;
+  --warning: #b7791f;
+  --warning-foreground: #ffffff;
+  --info: #356a8a;
+  --info-foreground: #ffffff;
+  --destructive: #c14a4a;
+  --border: oklch(1 0 0 / 12%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.82 0.16 126);
-  --chart-1: oklch(0.91 0.19 126);
-  --chart-2: oklch(0.68 0.15 45);
-  --chart-3: oklch(0.65 0.02 75);
-  --chart-4: oklch(0.5 0.02 75);
-  --chart-5: oklch(0.35 0.01 75);
-  --sidebar: oklch(0.16 0.006 75);
-  --sidebar-foreground: oklch(0.93 0.006 80);
-  --sidebar-primary: oklch(0.1 0.006 75);
-  --sidebar-primary-foreground: oklch(0.91 0.19 126);
-  --sidebar-accent: oklch(0.24 0.008 75);
-  --sidebar-accent-foreground: oklch(0.96 0.005 80);
+  --ring: #1f5a63;
+  --chart-1: #eef1f3;
+  --chart-2: #1f5a63;
+  --chart-3: #b99a5b;
+  --chart-4: #9fb0bd;
+  --chart-5: #287d5a;
+  --sidebar: #0b1f33;
+  --sidebar-foreground: #e8edf1;
+  --sidebar-primary: #16324a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #14293d;
+  --sidebar-accent-foreground: #f2f5f7;
   --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.82 0.16 126);
+  --sidebar-ring: #1f5a63;
 }
 
 @layer base {

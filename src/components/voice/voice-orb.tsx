@@ -20,13 +20,13 @@ export function VoiceOrb({ state, size = 208 }: { state: OrbState; size?: number
           <span
             className={cn(
               "absolute inset-0 rounded-full border animate-orb-pulse-ring",
-              state === "speaking" ? "border-white/40" : "border-lime/50"
+              state === "speaking" ? "border-white/40" : "border-teal/60"
             )}
           />
           <span
             className={cn(
               "absolute inset-0 rounded-full border animate-orb-pulse-ring [animation-delay:0.6s]",
-              state === "speaking" ? "border-white/30" : "border-lime/35"
+              state === "speaking" ? "border-white/30" : "border-teal/40"
             )}
           />
         </>
@@ -37,8 +37,8 @@ export function VoiceOrb({ state, size = 208 }: { state: OrbState; size?: number
         className={cn(
           "absolute inset-3 rounded-full blur-2xl transition-colors duration-500",
           state === "speaking" && "bg-white/25",
-          state === "listening" && "bg-lime/25",
-          state === "thinking" && "bg-white/10",
+          state === "listening" && "bg-teal/40",
+          state === "thinking" && "bg-info/25",
           state === "idle" && "bg-white/10"
         )}
       />
@@ -48,7 +48,7 @@ export function VoiceOrb({ state, size = 208 }: { state: OrbState; size?: number
         className={cn(
           "absolute inset-2 rounded-full opacity-40",
           state === "thinking"
-            ? "animate-orb-spin-slow border-2 border-dashed border-white/30"
+            ? "animate-orb-spin-slow border-2 border-dashed border-info/50"
             : "animate-orb-spin-slow-rev"
         )}
         style={{
@@ -81,7 +81,7 @@ export function VoiceOrb({ state, size = 208 }: { state: OrbState; size?: number
             {barHeights.map((h, i) => (
               <span
                 key={i}
-                className="w-[3px] rounded-full bg-lime animate-bar-bounce"
+                className="w-[3px] rounded-full bg-teal animate-bar-bounce"
                 style={{
                   height: "100%",
                   transform: `scaleY(${h})`,

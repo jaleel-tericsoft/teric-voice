@@ -47,12 +47,15 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[14px] font-medium transition-colors",
+                "relative flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[14px] font-medium transition-colors",
                 active
                   ? "bg-sidebar-primary text-sidebar-primary-foreground"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               )}
             >
+              {active && (
+                <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-lime" />
+              )}
               <Icon className="size-[17px]" strokeWidth={2} />
               {item.label}
             </Link>
@@ -80,7 +83,7 @@ export function Sidebar() {
       <div className="mt-auto pt-6">
         <Link
           href="/voice/new?form=employee-information"
-          className="flex items-center justify-center gap-2 rounded-full bg-lime px-4 py-3 text-[14px] font-semibold text-lime-foreground transition-transform active:scale-[0.98]"
+          className="flex items-center justify-center gap-2 rounded-full bg-teal px-4 py-3 text-[14px] font-semibold text-teal-foreground transition-transform hover:bg-[#18464d] active:scale-[0.98]"
         >
           <Mic className="size-4" strokeWidth={2.5} />
           Start Voice Form

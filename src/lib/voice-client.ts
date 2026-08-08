@@ -48,9 +48,10 @@ export async function speakText(text: string, signal?: AbortSignal): Promise<voi
   }
 }
 
-export async function transcribeAudio(blob: Blob): Promise<string> {
+export async function transcribeAudio(blob: Blob, language = "en"): Promise<string> {
   const form = new FormData();
   form.append("audio", blob, "answer.webm");
+  form.append("language", language);
   const res = await fetch("/api/voice/transcribe", { method: "POST", body: form });
   if (!res.ok) await throwForFailedResponse(res, "Transcription request failed");
   const data = await res.json();

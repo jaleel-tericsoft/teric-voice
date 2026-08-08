@@ -20,6 +20,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing 'audio' file" }, { status: 400 });
   }
 
+  // ISO-639-1 code, e.g. "en", "hi". Defaults to English — without this,
+  // Whisper auto-detects language from short/noisy clips and can guess
+  // wrong, producing garbled transcripts that look like "it's not listening".
+  const language = (form?.get("language") as string) || "en";
+
   // Very short clips are almost always silence/noise, not a real answer —
   // skip the API call and report it as unanswered directly.
   if (file.size < 4000) {
@@ -32,6 +37,7 @@ export async function POST(req: NextRequest) {
     const result = await openai.audio.transcriptions.create({
       file,
       model: "whisper-1",
+      language,
     });
     return NextResponse.json({ transcript: result.text.trim() });
   } catch (err) {

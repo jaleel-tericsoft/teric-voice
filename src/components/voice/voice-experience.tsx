@@ -16,6 +16,18 @@ import { VoiceOrb, type OrbState } from "@/components/voice/voice-orb";
 import { LiveFormPanel, type AnswerMap } from "@/components/voice/live-form-panel";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { getAllQuestions } from "@/lib/form-utils";
 import { MicSession, speakText, transcribeAudio, interpretAnswer } from "@/lib/voice-client";
 import { cn } from "@/lib/utils";
@@ -23,6 +35,12 @@ import type { FormDefinition, FormQuestion } from "@/types";
 
 const MAX_RETRIES = 2; // repeat the question up to this many times if unanswered
 const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
+
+const LANGUAGE_OPTIONS = [
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+] as const;
+type LanguageCode = (typeof LANGUAGE_OPTIONS)[number]["value"];
 
 function isPaused(pausedRef: { current: boolean }, cancelledRef: { current: boolean }) {
   return new Promise<void>((resolve) => {
@@ -61,11 +79,19 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
   const [paused, setPaused] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [language, setLanguage] = useState<LanguageCode>("en");
 
   const pausedRef = useRef(paused);
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
+
+  // Read from the effect below without re-running the whole voice loop
+  // whenever the user switches language mid-session.
+  const languageRef = useRef(language);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
 
   useEffect(() => {
     if (!started) return;
@@ -89,7 +115,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       const clip = await mic.recordUntilSilence();
       if (cancelledRef.current) return "";
       setOrbState("thinking");
-      return transcribeAudio(clip); // throws on failure
+      return transcribeAudio(clip, languageRef.current); // throws on failure
     }
 
     async function askQuestion(q: FormQuestion): Promise<string | boolean | null> {
@@ -358,12 +384,42 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
               >
                 {paused ? <MicOff className="size-6" /> : <Mic className="size-6" />}
               </button>
-              <button
-                className="flex size-11 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
-                aria-label="Settings"
-              >
-                <Settings2 className="size-[18px]" />
-              </button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    className="flex size-11 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+                    aria-label="Voice settings"
+                  >
+                    <Settings2 className="size-[18px]" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="end" side="top" className="w-64 border-none bg-background">
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Spoken language
+                    </span>
+                    <Select
+                      value={language}
+                      onValueChange={(v) => setLanguage(v as LanguageCode)}
+                    >
+                      <SelectTrigger className="h-9 w-full rounded-lg">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {LANGUAGE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">
+                      Set to English by default — switch if you'd rather answer in another
+                      language.
+                    </p>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           )}
         </div>

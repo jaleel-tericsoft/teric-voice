@@ -10,10 +10,28 @@ export interface Interpretation {
   off_topic: boolean;
 }
 
+export interface ReviewCommand {
+  intent: "submit" | "update_field" | "unclear";
+  field_name: string | null;
+  value: string | boolean | null;
+  spoken_reply: string;
+}
+
 /** Shared mic-level threshold (0..1) above which we consider the user to be
  * actively speaking — used both to detect the start of an answer and to
- * detect barge-in while the assistant is still talking. */
-export const SPEECH_LEVEL_THRESHOLD = 0.045;
+ * detect barge-in while the assistant is still talking. Paired with the
+ * spectral gate in MicSession.getLevel(), so this only needs to separate
+ * quiet vs. loud human speech, not speech vs. noise. */
+export const SPEECH_LEVEL_THRESHOLD = 0.035;
+
+// Human speech carries most of its energy in this band (fundamental +
+// lower formants). Environmental noise — fans, hums, traffic rumble, room
+// hiss — is usually concentrated below or above it, or spread flat across
+// the whole spectrum. Gating on energy concentration here, not just
+// loudness, is what stops the mic from "hearing" the room.
+const VOICE_BAND_LOW_HZ = 300;
+const VOICE_BAND_HIGH_HZ = 3400;
+const VOICE_BAND_MIN_RATIO = 0.45; // share of total energy that must sit in-band
 
 /** Reads {error, detail} off a failed route response and throws a message
  * specific enough to show directly in the UI (e.g. the real upstream
@@ -129,6 +147,25 @@ export async function interpretAnswer(params: {
   return res.json();
 }
 
+export async function interpretReviewCommand(params: {
+  transcript: string;
+  fields: Array<{
+    fieldName: string;
+    label: string;
+    fieldType: string;
+    options?: string[];
+    currentValue: string | boolean | undefined;
+  }>;
+}): Promise<ReviewCommand> {
+  const res = await fetch("/api/voice/review-command", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) await throwForFailedResponse(res, "Review command request failed");
+  return res.json();
+}
+
 /**
  * Holds one microphone permission grant for the whole voice session and
  * records answers with volume-based silence detection: once the user has
@@ -157,7 +194,7 @@ export class MicSession {
     this.audioContext = new AudioContext();
     const source = this.audioContext.createMediaStreamSource(this.stream);
     this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = 512;
+    this.analyser.fftSize = 1024; // finer frequency resolution for the voice-band gate below
     source.connect(this.analyser);
   }
 
@@ -170,17 +207,32 @@ export class MicSession {
   }
 
   /** Current mic input level, 0..1, for driving a live waveform visual and
-   * for speech/barge-in detection. */
+   * for speech/barge-in detection. Loud isn't enough to count as "level" —
+   * the energy also has to be concentrated in the human-voice frequency
+   * band, so a fan, hum, or room noise spike doesn't register as speech. */
   getLevel(): number {
-    if (!this.analyser) return 0;
-    const data = new Uint8Array(this.analyser.fftSize);
-    this.analyser.getByteTimeDomainData(data);
-    let sumSquares = 0;
-    for (const v of data) {
-      const norm = (v - 128) / 128;
-      sumSquares += norm * norm;
+    if (!this.analyser || !this.audioContext) return 0;
+    const freqData = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.getByteFrequencyData(freqData);
+
+    const binWidth = this.audioContext.sampleRate / this.analyser.fftSize;
+    const loBin = Math.max(1, Math.floor(VOICE_BAND_LOW_HZ / binWidth));
+    const hiBin = Math.min(freqData.length - 1, Math.ceil(VOICE_BAND_HIGH_HZ / binWidth));
+
+    let voiceEnergy = 0;
+    let totalEnergy = 0;
+    for (let i = 1; i < freqData.length; i++) {
+      const e = (freqData[i] / 255) ** 2;
+      totalEnergy += e;
+      if (i >= loBin && i <= hiBin) voiceEnergy += e;
     }
-    return Math.min(1, Math.sqrt(sumSquares / data.length) * 4);
+    if (totalEnergy < 1e-6) return 0;
+
+    const voiceRatio = voiceEnergy / totalEnergy;
+    if (voiceRatio < VOICE_BAND_MIN_RATIO) return 0; // noise-shaped, not voice-shaped
+
+    const overallLevel = Math.sqrt(totalEnergy / freqData.length);
+    return Math.min(1, overallLevel * 2.5);
   }
 
   async recordUntilSilence(opts: {

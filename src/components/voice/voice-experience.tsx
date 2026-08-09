@@ -34,6 +34,7 @@ import {
   speakText,
   transcribeAudio,
   interpretAnswer,
+  interpretReviewCommand,
   SPEECH_LEVEL_THRESHOLD,
 } from "@/lib/voice-client";
 import { cn } from "@/lib/utils";
@@ -115,6 +116,14 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
   useEffect(() => {
     languageRef.current = language;
   }, [language]);
+
+  // The review-phase loop below runs once and then keeps listening
+  // indefinitely — it needs to see each field update as it happens, not the
+  // stale snapshot captured when the effect first ran.
+  const answersRef = useRef(answers);
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
 
   // One mic permission grant, shared across the question loop AND the
   // review-phase "say submit" listener — kept alive between the two instead
@@ -264,14 +273,29 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, form.id]);
 
-  // Review phase: keep the mic responsive so the user can just say "submit"
-  // instead of reaching for the button, per the voice-command flow in
-  // scope.md ("Submit form", "Confirm", "Yes, submit").
+  // Review phase: keep the mic responsive for both "submit" AND corrections
+  // ("change my phone number to...") — per scope.md's voice-command flow,
+  // and so a change request gets a real answer instead of being silently
+  // dropped for not matching a submit phrase.
   useEffect(() => {
     if (!started || phase !== "review" || micError || apiError) return;
 
     const cancelledRef = { current: false };
     const mic = micRef.current!;
+    const reviewQuestions = getAllQuestions(form);
+
+    function bargeInCheck() {
+      return !pausedRef.current && mic.getLevel() > BARGE_IN_THRESHOLD;
+    }
+
+    async function speak(text: string) {
+      setOrbState("speaking");
+      setAssistantText(text);
+      setUserText("");
+      await isPaused(pausedRef, cancelledRef);
+      if (cancelledRef.current) return;
+      await speakText(text, { shouldInterrupt: bargeInCheck }).catch(() => {});
+    }
 
     async function run() {
       try {
@@ -281,13 +305,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       }
       if (cancelledRef.current) return;
 
-      setOrbState("speaking");
-      const prompt = "All done. Say submit when you're ready, or edit anything on the right first.";
-      setAssistantText(prompt);
-      setUserText("");
-      await speakText(prompt, {
-        shouldInterrupt: () => !pausedRef.current && mic.getLevel() > BARGE_IN_THRESHOLD,
-      }).catch(() => {});
+      await speak("All done. Say submit when you're ready, or ask to change any field.");
       if (cancelledRef.current) return;
 
       while (!cancelledRef.current) {
@@ -306,12 +324,45 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
 
         setUserText(transcript);
 
-        if (SUBMIT_INTENT_RE.test(transcript)) {
-          setOrbState("idle");
+        const fields = reviewQuestions.map((q) => ({
+          fieldName: q.fieldName,
+          label: q.questionText,
+          fieldType: q.fieldType,
+          options: q.options?.map((o) => o.value),
+          currentValue: answersRef.current[q.fieldName],
+        }));
+
+        const command = await interpretReviewCommand({ transcript, fields }).catch(() => null);
+
+        if (!command) {
+          // Review-command API hiccup — fall back to a plain submit check
+          // rather than leaving the user's request completely unanswered.
+          if (SUBMIT_INTENT_RE.test(transcript)) {
+            setOrbState("idle");
+            handleSubmit();
+            return;
+          }
+          continue;
+        }
+
+        if (command.intent === "submit") {
+          await speak(command.spoken_reply);
+          if (cancelledRef.current) return;
           handleSubmit();
           return;
         }
-        setOrbState("idle");
+
+        if (
+          command.intent === "update_field" &&
+          command.field_name &&
+          reviewQuestions.some((q) => q.fieldName === command.field_name)
+        ) {
+          setAnswers((prev) => ({ ...prev, [command.field_name as string]: command.value ?? "" }));
+        }
+
+        // update_field confirmation or unclear guidance — either way, respond.
+        await speak(command.spoken_reply);
+        if (cancelledRef.current) return;
       }
     }
 

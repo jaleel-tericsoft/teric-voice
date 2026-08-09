@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { zodResponseFormat } from "openai/helpers/zod";
 
 // Turns a raw spoken-answer transcript into a structured field value, per
 // scope.md's "AI should produce structured data for every answer" rule.
@@ -43,9 +43,9 @@ Field type value expectations:
 - phone, number, short_text, long_text, email: cleaned-up text (e.g. spelled-out emails like "ahmed dot khan at example dot com" become "ahmed.khan@example.com")`;
 
 export async function POST(req: NextRequest) {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY is not configured on the server" },
+      { error: "OPENAI_API_KEY is not configured on the server" },
       { status: 500 }
     );
   }
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const userMessage = [
     `Question: ${question}`,
@@ -83,28 +83,26 @@ export async function POST(req: NextRequest) {
     .join("\n");
 
   try {
-    const response = await anthropic.messages.parse({
-      model: "claude-opus-5",
-      max_tokens: 512,
-      thinking: { type: "disabled" },
-      output_config: {
-        effort: "low",
-        format: zodOutputFormat(InterpretationSchema),
-      },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
+    const completion = await openai.chat.completions.parse({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userMessage },
+      ],
+      response_format: zodResponseFormat(InterpretationSchema, "interpretation"),
     });
 
-    if (!response.parsed_output) {
+    const parsed = completion.choices[0]?.message?.parsed;
+    if (!parsed) {
       return NextResponse.json(
         { error: "Model did not return parseable output" },
         { status: 502 }
       );
     }
 
-    return NextResponse.json(response.parsed_output);
+    return NextResponse.json(parsed);
   } catch (err) {
-    console.error("[voice/interpret] Claude request failed", err);
+    console.error("[voice/interpret] OpenAI request failed", err);
     const detail = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: "Interpretation failed", detail }, { status: 502 });
   }

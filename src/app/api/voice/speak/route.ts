@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
 
-// Reads and speaks a form question aloud.
+// Reads and speaks a form question aloud via ElevenLabs TTS.
 // POST { text: string } -> audio/mpeg bytes
 
+// ElevenLabs' well-known default premade voice ("Rachel") — used unless
+// ELEVENLABS_VOICE_ID is set. Swap it any time without touching code.
+const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+
+// Flash is ElevenLabs' lowest-latency model — matters here since this is a
+// live back-and-forth conversation, not a batch narration job.
+const MODEL_ID = "eleven_flash_v2_5";
+
 export async function POST(req: NextRequest) {
-  if (!process.env.OPENAI_API_KEY) {
+  if (!process.env.ELEVENLABS_API_KEY) {
     return NextResponse.json(
-      { error: "OPENAI_API_KEY is not configured on the server" },
+      { error: "ELEVENLABS_API_KEY is not configured on the server" },
       { status: 500 }
     );
   }
@@ -18,17 +25,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing 'text'" }, { status: 400 });
   }
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
 
   try {
-    const speech = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: "alloy",
-      input: text,
-      response_format: "mp3",
-    });
+    const res = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": process.env.ELEVENLABS_API_KEY,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+          text,
+          model_id: MODEL_ID,
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+      }
+    );
 
-    const buffer = Buffer.from(await speech.arrayBuffer());
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      const detail = errBody?.detail?.message || errBody?.detail || `ElevenLabs returned ${res.status}`;
+      console.error("[voice/speak] ElevenLabs TTS request failed", detail);
+      return NextResponse.json({ error: "Text-to-speech failed", detail }, { status: 502 });
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
     return new NextResponse(buffer, {
       headers: {
         "Content-Type": "audio/mpeg",

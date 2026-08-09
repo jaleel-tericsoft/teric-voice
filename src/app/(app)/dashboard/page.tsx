@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import {
   Inbox,
@@ -10,7 +12,8 @@ import {
 } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { EntryStatusBadge } from "@/components/entries/status-badge";
-import { dashboardStats, entries, forms, currentUser } from "@/lib/mock-data";
+import { dashboardStats, entries, currentUser } from "@/lib/mock-data";
+import { useFormsStore } from "@/lib/forms-store";
 import { timeAgo } from "@/lib/format";
 
 function initials(name: string) {
@@ -18,6 +21,7 @@ function initials(name: string) {
 }
 
 export default function DashboardPage() {
+  const { forms } = useFormsStore();
   const recent = [...entries]
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
     .slice(0, 5);

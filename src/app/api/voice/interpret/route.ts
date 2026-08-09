@@ -12,7 +12,7 @@ const InterpretationSchema = z.object({
   value: z
     .union([z.string(), z.boolean()])
     .describe(
-      "The structured answer. For yes_no fields, a boolean. For single_select, the option's value (not label). Otherwise the cleaned-up text/number/date."
+      "The structured answer. For yes_no fields, a boolean. For single_select, the option's value (not label). Otherwise the cleaned-up text/number/date. Empty string if off_topic is true."
     ),
   confidence: z
     .number()
@@ -21,20 +21,31 @@ const InterpretationSchema = z.object({
     .describe("How confident you are that 'value' correctly captures what the user said."),
   needs_clarification: z
     .boolean()
-    .describe("True if the answer is ambiguous, off-topic, or too uncertain to populate the field."),
+    .describe(
+      "True if the answer is a genuine but ambiguous/uncertain attempt to answer the question (e.g. a mumbled number, a vague amount). False if off_topic is true — that's a different case, handled separately."
+    ),
   clarification_question: z
     .string()
     .nullable()
     .describe(
-      "If needs_clarification is true, a short confirming question to ask the user, e.g. \"I understood your annual income as ₹8 lakh. Is that correct?\". Otherwise null."
+      "Only used when needs_clarification is true: a short confirming question restating your best guess, e.g. \"I understood your annual income as ₹8 lakh. Is that correct?\". Otherwise null."
+    ),
+  off_topic: z
+    .boolean()
+    .describe(
+      "True if the transcript doesn't attempt to answer the question at all — small talk, a question back to the assistant, an unrelated remark, or silence-filler words. False for any genuine (even if unclear) attempt to answer."
     ),
 });
 
 const SYSTEM_PROMPT = `You interpret a spoken answer to a form question for a voice-based data entry app.
 
-Given the question, the expected field type, and a raw speech transcript, extract the structured value the user intended — not the raw transcript. Understand natural variation (e.g. "yeah", "I do", "yes I have one" all mean yes for a yes_no field).
+Given the question, the expected field type, and a raw speech transcript, extract the structured value the user intended — not the raw transcript. Understand natural variation (e.g. "yeah", "I do", "yes I have one" all mean yes for a yes_no field). If options were given for a single_select field, match spoken words to the closest option even if phrased differently.
 
-Never silently guess on ambiguous, incomplete, or off-topic answers — set needs_clarification to true instead, with a short spoken confirmation question that restates your best guess.
+Two distinct failure cases — do not conflate them:
+- off_topic: the user didn't attempt to answer at all (small talk, asking the assistant something, an unrelated remark). Never guess a value here.
+- needs_clarification: the user did attempt to answer, but it's ambiguous or low-confidence. Ask a short yes/no confirmation of your best guess instead of silently accepting it.
+
+A genuine attempt that's merely informal or imprecise (e.g. "umm, Bengaluru I think") is NOT off_topic — interpret it normally, using needs_clarification only if your confidence is genuinely low.
 
 Field type value expectations:
 - yes_no: boolean
@@ -68,6 +79,7 @@ export async function POST(req: NextRequest) {
       confidence: 0,
       needs_clarification: false,
       clarification_question: null,
+      off_topic: false,
     });
   }
 

@@ -1,24 +1,43 @@
-// Browser-side voice I/O: plays TTS audio, records the user's answer with
-// silence detection, and calls the transcribe/interpret API routes.
+// Browser-side voice I/O: plays TTS audio (with barge-in support), records
+// the user's answer with silence detection, and calls the
+// transcribe/interpret API routes.
 
 export interface Interpretation {
   value: string | boolean;
   confidence: number;
   needs_clarification: boolean;
   clarification_question: string | null;
+  off_topic: boolean;
 }
+
+/** Shared mic-level threshold (0..1) above which we consider the user to be
+ * actively speaking — used both to detect the start of an answer and to
+ * detect barge-in while the assistant is still talking. */
+export const SPEECH_LEVEL_THRESHOLD = 0.045;
 
 /** Reads {error, detail} off a failed route response and throws a message
  * specific enough to show directly in the UI (e.g. the real upstream
- * OpenAI/Anthropic error), instead of a generic "request failed". */
+ * OpenAI/ElevenLabs error), instead of a generic "request failed". */
 async function throwForFailedResponse(res: Response, fallback: string): Promise<never> {
   const body = await res.json().catch(() => null);
   const message = body?.detail || body?.error || fallback;
   throw new Error(message);
 }
 
-/** Fetches TTS audio for `text` and plays it, resolving once playback ends. */
-export async function speakText(text: string, signal?: AbortSignal): Promise<void> {
+/**
+ * Fetches TTS audio for `text` and plays it. If `shouldInterrupt` starts
+ * returning true (the user has started talking over the assistant), playback
+ * is stopped immediately instead of running to the end — this is what makes
+ * the assistant "hear" a mid-question interruption rather than talking over
+ * the user. `graceMs` ignores interruption checks for a brief window after
+ * playback starts, so a stray noise right as audio begins doesn't cut it off.
+ */
+export async function speakText(
+  text: string,
+  opts: { signal?: AbortSignal; shouldInterrupt?: () => boolean; graceMs?: number } = {}
+): Promise<{ interrupted: boolean }> {
+  const { signal, shouldInterrupt, graceMs = 350 } = opts;
+
   const res = await fetch("/api/voice/speak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -32,16 +51,53 @@ export async function speakText(text: string, signal?: AbortSignal): Promise<voi
   const audio = new Audio(url);
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      audio.onended = () => resolve();
-      audio.onerror = () => reject(new Error("audio playback failed"));
+    return await new Promise<{ interrupted: boolean }>((resolve, reject) => {
+      let interrupted = false;
+      let rafId = 0;
+      let startedAt = 0;
+
+      const stopPolling = () => {
+        if (rafId) cancelAnimationFrame(rafId);
+      };
+
+      const poll = () => {
+        if (shouldInterrupt && Date.now() - startedAt > graceMs && shouldInterrupt()) {
+          interrupted = true;
+          audio.pause();
+          return;
+        }
+        rafId = requestAnimationFrame(poll);
+      };
+
+      audio.onended = () => {
+        stopPolling();
+        resolve({ interrupted: false });
+      };
+      audio.onerror = () => {
+        stopPolling();
+        reject(new Error("audio playback failed"));
+      };
+      audio.onpause = () => {
+        if (interrupted) {
+          stopPolling();
+          resolve({ interrupted: true });
+        }
+      };
       if (signal) {
         signal.addEventListener("abort", () => {
+          stopPolling();
           audio.pause();
-          resolve();
+          resolve({ interrupted: false });
         });
       }
-      audio.play().catch(reject);
+
+      audio
+        .play()
+        .then(() => {
+          startedAt = Date.now();
+          if (shouldInterrupt) rafId = requestAnimationFrame(poll);
+        })
+        .catch(reject);
     });
   } finally {
     URL.revokeObjectURL(url);
@@ -88,7 +144,16 @@ export class MicSession {
 
   async init(): Promise<void> {
     if (this.stream) return;
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        // Critical for barge-in: without echo cancellation, the assistant's
+        // own TTS audio bleeding into the mic (on speaker, not headphones)
+        // can trigger a false "the user is talking" detection.
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     this.audioContext = new AudioContext();
     const source = this.audioContext.createMediaStreamSource(this.stream);
     this.analyser = this.audioContext.createAnalyser();
@@ -104,7 +169,8 @@ export class MicSession {
     this.analyser = null;
   }
 
-  /** Current mic input level, 0..1, for driving a live waveform visual. */
+  /** Current mic input level, 0..1, for driving a live waveform visual and
+   * for speech/barge-in detection. */
   getLevel(): number {
     if (!this.analyser) return 0;
     const data = new Uint8Array(this.analyser.fftSize);
@@ -122,7 +188,11 @@ export class MicSession {
     silenceMs?: number;
     speechThreshold?: number;
   } = {}): Promise<Blob> {
-    const { maxDurationMs = 12000, silenceMs = 1600, speechThreshold = 0.05 } = opts;
+    const {
+      maxDurationMs = 12000,
+      silenceMs = 900, // shorter wait after the user stops = faster turnaround
+      speechThreshold = SPEECH_LEVEL_THRESHOLD,
+    } = opts;
     if (!this.stream) await this.init();
 
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")

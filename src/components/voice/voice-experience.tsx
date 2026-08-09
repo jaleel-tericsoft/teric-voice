@@ -29,12 +29,24 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getAllQuestions } from "@/lib/form-utils";
-import { MicSession, speakText, transcribeAudio, interpretAnswer } from "@/lib/voice-client";
+import {
+  MicSession,
+  speakText,
+  transcribeAudio,
+  interpretAnswer,
+  SPEECH_LEVEL_THRESHOLD,
+} from "@/lib/voice-client";
 import { cn } from "@/lib/utils";
 import type { FormDefinition, FormQuestion } from "@/types";
 
 const MAX_RETRIES = 2; // repeat the question up to this many times if unanswered
 const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
+const SUBMIT_INTENT_RE =
+  /\b(submit|confirm(?:ed)?|that'?s (?:correct|right|it|all)|go ahead|looks good|yes,? submit)\b/i;
+
+// Require slightly more deliberate speech to interrupt the assistant than
+// to simply be picked up while listening — avoids stray noise cutting it off.
+const BARGE_IN_THRESHOLD = SPEECH_LEVEL_THRESHOLD * 1.3;
 
 const LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
@@ -50,6 +62,17 @@ function isPaused(pausedRef: { current: boolean }, cancelledRef: { current: bool
     };
     check();
   });
+}
+
+/** Builds what the assistant should say for a question, including reading
+ * out the options for a dropdown/single-select field. */
+function questionPrompt(q: FormQuestion, attempt: number): string {
+  let text = attempt === 0 ? q.questionText : `Sorry, I didn't catch that. ${q.questionText}`;
+  if (q.fieldType === "single_select" && q.options?.length) {
+    const labels = q.options.map((o) => o.label).join(", ");
+    text += ` Your options are: ${labels}.`;
+  }
+  return text;
 }
 
 /** Chrome/Safari block audio.play() without a real click preceding it —
@@ -86,26 +109,44 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     pausedRef.current = paused;
   }, [paused]);
 
-  // Read from the effect below without re-running the whole voice loop
-  // whenever the user switches language mid-session.
+  // Read from effects without re-running them whenever the user switches
+  // language mid-session.
   const languageRef = useRef(language);
   useEffect(() => {
     languageRef.current = language;
   }, [language]);
 
+  // One mic permission grant, shared across the question loop AND the
+  // review-phase "say submit" listener — kept alive between the two instead
+  // of being re-acquired, and stopped only when the whole screen unmounts.
+  const micRef = useRef<MicSession | null>(null);
+  if (!micRef.current) micRef.current = new MicSession();
+  useEffect(() => {
+    return () => {
+      micRef.current?.stop();
+    };
+  }, []);
+
   useEffect(() => {
     if (!started) return;
 
     const cancelledRef = { current: false };
-    const mic = new MicSession();
+    const mic = micRef.current!;
 
-    async function speak(text: string) {
+    function bargeInCheck() {
+      return !pausedRef.current && mic.getLevel() > BARGE_IN_THRESHOLD;
+    }
+
+    async function speak(text: string): Promise<{ interrupted: boolean }> {
       setOrbState("speaking");
       setAssistantText(text);
       setUserText("");
       await isPaused(pausedRef, cancelledRef);
-      if (cancelledRef.current) return;
-      await speakText(text); // throws on failure — caller decides how to handle it
+      if (cancelledRef.current) return { interrupted: false };
+      // shouldInterrupt lets the user talk over the assistant instead of
+      // waiting for it to finish — this is what makes it actually listen
+      // mid-sentence rather than plowing through the whole question.
+      return speakText(text, { shouldInterrupt: bargeInCheck });
     }
 
     async function listenAndTranscribe(): Promise<string> {
@@ -122,7 +163,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (cancelledRef.current) return null;
 
-        await speak(attempt === 0 ? q.questionText : `Sorry, I didn't catch that. ${q.questionText}`);
+        await speak(questionPrompt(q, attempt));
         if (cancelledRef.current) return null;
 
         const transcript = await listenAndTranscribe();
@@ -138,6 +179,13 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
           options: q.options?.map((o) => o.value),
           transcript,
         });
+
+        if (interpretation.off_topic) {
+          // Didn't attempt to answer at all — redirect, don't burn a
+          // confirmation round-trip on it.
+          await speak(`Let's stay focused on the form. ${questionPrompt(q, 0)}`);
+          continue;
+        }
 
         if (!interpretation.needs_clarification) {
           return interpretation.value;
@@ -196,28 +244,83 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         const reason = err instanceof Error ? err.message : String(err);
         setApiError(`${reason} — you can still fill out the form manually on the right.`);
         setOrbState("idle");
-        mic.stop();
+        mic.stop(); // hard failure — no more voice interaction this session
         return;
       }
-
-      mic.stop();
 
       if (!cancelledRef.current) {
         setActiveField(null);
         setOrbState("idle");
         setAssistantText("All done — let's review your answers.");
         setUserText("");
-        setPhase("review");
+        setPhase("review"); // mic stays live — the review-phase effect below reuses it
       }
     }
 
     run();
     return () => {
       cancelledRef.current = true;
-      mic.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, form.id]);
+
+  // Review phase: keep the mic responsive so the user can just say "submit"
+  // instead of reaching for the button, per the voice-command flow in
+  // scope.md ("Submit form", "Confirm", "Yes, submit").
+  useEffect(() => {
+    if (!started || phase !== "review" || micError || apiError) return;
+
+    const cancelledRef = { current: false };
+    const mic = micRef.current!;
+
+    async function run() {
+      try {
+        await mic.init();
+      } catch {
+        return; // mic never worked — the Confirm & Submit button still works
+      }
+      if (cancelledRef.current) return;
+
+      setOrbState("speaking");
+      const prompt = "All done. Say submit when you're ready, or edit anything on the right first.";
+      setAssistantText(prompt);
+      setUserText("");
+      await speakText(prompt, {
+        shouldInterrupt: () => !pausedRef.current && mic.getLevel() > BARGE_IN_THRESHOLD,
+      }).catch(() => {});
+      if (cancelledRef.current) return;
+
+      while (!cancelledRef.current) {
+        setOrbState("listening");
+        await isPaused(pausedRef, cancelledRef);
+        if (cancelledRef.current) return;
+
+        const clip = await mic.recordUntilSilence();
+        if (cancelledRef.current) return;
+        if (clip.size < 4000) continue; // essentially silence — keep waiting
+
+        setOrbState("thinking");
+        const transcript = await transcribeAudio(clip, languageRef.current).catch(() => "");
+        if (cancelledRef.current) return;
+        if (!transcript.trim()) continue;
+
+        setUserText(transcript);
+
+        if (SUBMIT_INTENT_RE.test(transcript)) {
+          setOrbState("idle");
+          handleSubmit();
+          return;
+        }
+        setOrbState("idle");
+      }
+    }
+
+    run();
+    return () => {
+      cancelledRef.current = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [started, phase, micError, apiError]);
 
   // Manual-entry fallback: if voice never worked (mic denied, or the API
   // routes errored), let the user complete the form by hand and unlock
@@ -313,7 +416,8 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
               <div className="flex flex-col gap-2">
                 <h2 className="text-xl font-semibold">Ready when you are</h2>
                 <p className="max-w-xs text-sm text-white/60">
-                  Tap start, allow microphone access, and answer each question out loud.
+                  Tap start, allow microphone access, and answer each question out loud. You
+                  can talk over the assistant any time.
                 </p>
               </div>
               <button
@@ -337,7 +441,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
                   <p className="text-sm text-white/70">{error}</p>
                 </div>
               ) : (
-                <VoiceOrb state={phase === "review" ? "idle" : orbState} size={196} />
+                <VoiceOrb state={phase === "submitting" ? "idle" : orbState} size={196} />
               )}
 
               <div className="flex max-w-md flex-col items-center gap-3 text-center">
@@ -447,7 +551,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
 
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/60 px-6 py-4">
             <p className="text-xs text-muted-foreground">
-              You can edit any field manually before confirming.
+              You can edit any field manually, or just say "submit" when ready.
             </p>
             <Button
               disabled={phase !== "review"}

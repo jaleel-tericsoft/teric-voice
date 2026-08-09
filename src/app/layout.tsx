@@ -15,7 +15,7 @@ const fontMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Voxform — Voice-to-Form",
+  title: "TericVoice — Voice-to-Form",
   description: "Voice-based form data collection and entry management.",
 };
 

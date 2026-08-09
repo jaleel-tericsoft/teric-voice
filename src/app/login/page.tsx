@@ -22,7 +22,7 @@ export default function LoginPage() {
               <Mic className="size-4" strokeWidth={2.5} />
             </div>
             <span className="text-[15px] font-bold tracking-tight">
-              Voxform
+              TericVoice
             </span>
           </div>
           <div className="relative flex flex-col gap-3">
@@ -40,7 +40,7 @@ export default function LoginPage() {
             </p>
           </div>
           <p className="relative text-xs text-white/30">
-            © 2026 Voxform. All rights reserved.
+            © 2026 TericVoice. All rights reserved.
           </p>
         </div>
 
@@ -52,7 +52,7 @@ export default function LoginPage() {
                 <Mic className="size-4" strokeWidth={2.5} />
               </div>
               <span className="text-[15px] font-bold tracking-tight">
-                Voxform
+                TericVoice
               </span>
             </div>
           </div>

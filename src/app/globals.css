@@ -60,7 +60,7 @@
 }
 
 :root {
-  /* UK automotive dealership palette — restrained navy / teal / gold / white.
+  /* UK automotive dealership palette — restrained navy / teal / green / white.
      Radius: 8-10px per color theme.md, cards near-flat. */
   --radius: 0.625rem;
 
@@ -74,12 +74,12 @@
   --popover: #ffffff;
   --popover-foreground: #17212b;
 
-  /* Primary = Deep Navy. "Lime" token repurposed to Champagne Gold — used
-     sparingly for indicators/icons/milestones, never large fills. */
+  /* Primary = Deep Navy. "Lime" token = the emerald accent — used sparingly
+     for indicators/icons/milestones, never large fills. */
   --primary: #102a43;
   --primary-foreground: #ffffff;
-  --lime: #b99a5b;
-  --lime-foreground: #4a3b1f;
+  --lime: #3E9B6F;
+  --lime-foreground: #0F3D28;
 
   /* Secondary BUTTON style per color theme.md: white surface, navy border+text.
      Petrol Teal is kept separate — reserved sparingly for named "important
@@ -109,7 +109,7 @@
 
   --chart-1: #102a43;
   --chart-2: #1f5a63;
-  --chart-3: #b99a5b;
+  --chart-3: #3E9B6F;
   --chart-4: #52606d;
   --chart-5: #287d5a;
 
@@ -134,8 +134,8 @@
   --popover-foreground: #eef1f3;
   --primary: #eef1f3;
   --primary-foreground: #102a43;
-  --lime: #b99a5b;
-  --lime-foreground: #4a3b1f;
+  --lime: #3E9B6F;
+  --lime-foreground: #0F3D28;
   --secondary: #16324a;
   --secondary-foreground: #eef1f3;
   --teal: #1f5a63;
@@ -156,7 +156,7 @@
   --ring: #1f5a63;
   --chart-1: #eef1f3;
   --chart-2: #1f5a63;
-  --chart-3: #b99a5b;
+  --chart-3: #3E9B6F;
   --chart-4: #9fb0bd;
   --chart-5: #287d5a;
   --sidebar: #0b1f33;

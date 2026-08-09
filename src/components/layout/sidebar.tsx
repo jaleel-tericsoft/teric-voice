@@ -8,10 +8,8 @@ import {
   ClipboardList,
   Settings,
   Mic,
-  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { forms } from "@/lib/mock-data";
 
 const primaryNav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
@@ -30,7 +28,7 @@ export function Sidebar() {
         <div className="flex size-8 items-center justify-center rounded-xl bg-lime text-lime-foreground">
           <Mic className="size-4" strokeWidth={2.5} />
         </div>
-        <span className="text-[15px] font-bold tracking-tight">Voxform</span>
+        <span className="text-[15px] font-bold tracking-tight">TericVoice</span>
       </div>
 
       {/* Primary navigation */}
@@ -61,23 +59,6 @@ export function Sidebar() {
             </Link>
           );
         })}
-      </nav>
-
-      {/* Secondary: forms shortcut list */}
-      <div className="mt-7 px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/40">
-        Your Forms
-      </div>
-      <nav className="flex flex-col gap-0.5">
-        {forms.map((form) => (
-          <Link
-            key={form.id}
-            href={`/entries?form=${form.formId}`}
-            className="group flex items-center justify-between rounded-xl px-3 py-2.5 text-[14px] text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          >
-            <span className="truncate">{form.name}</span>
-            <ChevronRight className="size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
-          </Link>
-        ))}
       </nav>
 
       <div className="mt-auto pt-6">

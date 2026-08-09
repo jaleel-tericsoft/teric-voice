@@ -6,16 +6,16 @@ import { Input } from "@/components/ui/input";
 import { ProfileMenu } from "@/components/layout/profile-menu";
 
 const titleMap: Record<string, { section: string; page: string }> = {
-  "/dashboard": { section: "Voxform", page: "Dashboard" },
-  "/entries": { section: "Voxform", page: "Entries" },
-  "/form-builder": { section: "Voxform", page: "Form Builder" },
-  "/settings": { section: "Voxform", page: "Settings" },
+  "/dashboard": { section: "TericVoice", page: "Dashboard" },
+  "/entries": { section: "TericVoice", page: "Entries" },
+  "/form-builder": { section: "TericVoice", page: "Form Builder" },
+  "/settings": { section: "TericVoice", page: "Settings" },
 };
 
 export function Topbar() {
   const pathname = usePathname() ?? "/dashboard";
   const base = "/" + (pathname.split("/").filter(Boolean)[0] ?? "dashboard");
-  const info = titleMap[base] ?? { section: "Voxform", page: "Entry" };
+  const info = titleMap[base] ?? { section: "TericVoice", page: "Entry" };
 
   return (
     <header className="flex h-[68px] shrink-0 items-center justify-between gap-4 px-6">

@@ -1,14 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import { FileText, Loader2, Eye, Download, RefreshCw } from "lucide-react";
+import { FileText, Loader2, Eye, Download, RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { PdfStatus } from "@/types";
+import { useEntryPdf } from "@/hooks/use-entry-pdf";
+import type { Entry, FormDefinition, PdfStatus } from "@/types";
 
-export function PdfAction({ status: initial }: { status: PdfStatus }) {
-  const [status, setStatus] = useState<PdfStatus>(initial);
+export function PdfAction({
+  status,
+  entry,
+  form,
+  variant = "compact",
+}: {
+  status: PdfStatus;
+  entry: Entry;
+  form: FormDefinition | undefined;
+  variant?: "compact" | "detail";
+}) {
+  const pdfState = useEntryPdf(entry, form, status);
 
-  if (status === "generating") {
+  if (pdfState.status === "generating") {
     return (
       <Button
         size="sm"
@@ -22,14 +32,72 @@ export function PdfAction({ status: initial }: { status: PdfStatus }) {
     );
   }
 
-  if (status === "generated") {
+  if (pdfState.error) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Button
+          size="sm"
+          variant="secondary"
+          className="rounded-full text-xs text-destructive"
+          onClick={(e) => {
+            e.stopPropagation();
+            pdfState.generate();
+          }}
+        >
+          <AlertTriangle className="size-3.5" />
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (pdfState.status === "generated") {
+    if (variant === "detail") {
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="flex aspect-[3/4] items-center justify-center rounded-xl bg-muted text-muted-foreground">
+            <Eye className="size-6" />
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              className="flex-1 rounded-full text-xs"
+              onClick={() => pdfState.view()}
+            >
+              <Eye className="size-3.5" />
+              View
+            </Button>
+            <Button
+              variant="secondary"
+              className="flex-1 rounded-full text-xs"
+              onClick={() => pdfState.download()}
+            >
+              <Download className="size-3.5" />
+              Download
+            </Button>
+          </div>
+          <Button
+            variant="ghost"
+            className="rounded-full text-xs text-muted-foreground"
+            onClick={() => pdfState.generate()}
+          >
+            <RefreshCw className="size-3.5" />
+            Regenerate PDF
+          </Button>
+        </div>
+      );
+    }
+
     return (
       <div className="flex items-center gap-1.5">
         <Button
           size="sm"
           variant="secondary"
           className="rounded-full text-xs"
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            pdfState.view();
+          }}
         >
           <Eye className="size-3.5" />
           View
@@ -39,7 +107,10 @@ export function PdfAction({ status: initial }: { status: PdfStatus }) {
           variant="ghost"
           aria-label="Download PDF"
           className="rounded-full"
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            pdfState.download();
+          }}
         >
           <Download className="size-3.5" />
         </Button>
@@ -50,8 +121,7 @@ export function PdfAction({ status: initial }: { status: PdfStatus }) {
           className="rounded-full text-muted-foreground"
           onClick={(e) => {
             e.stopPropagation();
-            setStatus("generating");
-            setTimeout(() => setStatus("generated"), 1400);
+            pdfState.generate();
           }}
         >
           <RefreshCw className="size-3.5" />
@@ -67,8 +137,7 @@ export function PdfAction({ status: initial }: { status: PdfStatus }) {
       className="rounded-full text-xs"
       onClick={(e) => {
         e.stopPropagation();
-        setStatus("generating");
-        setTimeout(() => setStatus("generated"), 1400);
+        pdfState.generate();
       }}
     >
       <FileText className="size-3.5" />

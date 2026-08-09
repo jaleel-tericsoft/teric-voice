@@ -98,7 +98,7 @@ export function EntriesTable({
                 <EntryStatusBadge status={entry.status} />
               </TableCell>
               <TableCell className="pr-4 text-right">
-                <PdfAction status={entry.pdf.status} />
+                <PdfAction status={entry.pdf.status} entry={entry} form={form} />
               </TableCell>
             </TableRow>
           ))}

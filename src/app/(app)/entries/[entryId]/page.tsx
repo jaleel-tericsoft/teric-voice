@@ -2,16 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   ArrowLeft,
-  Eye,
-  Download,
-  RefreshCw,
   Mail,
   User,
   Calendar,
   Hash,
   GitBranch,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { EntryStatusBadge, EmailStatusBadge } from "@/components/entries/status-badge";
 import { PdfAction } from "@/components/entries/pdf-action";
 import { ResendEmailButton } from "@/components/entries/resend-email-button";
@@ -178,29 +174,7 @@ export default async function EntryDetailPage(
             <h2 className="mb-4 text-[15px] font-semibold text-foreground">
               Document
             </h2>
-            {entry.pdf.status === "generated" ? (
-              <div className="flex flex-col gap-3">
-                <div className="flex aspect-[3/4] items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                  <Eye className="size-6" />
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="secondary" className="flex-1 rounded-full text-xs">
-                    <Eye className="size-3.5" />
-                    View
-                  </Button>
-                  <Button variant="secondary" className="flex-1 rounded-full text-xs">
-                    <Download className="size-3.5" />
-                    Download
-                  </Button>
-                </div>
-                <Button variant="ghost" className="rounded-full text-xs text-muted-foreground">
-                  <RefreshCw className="size-3.5" />
-                  Regenerate PDF
-                </Button>
-              </div>
-            ) : (
-              <PdfAction status={entry.pdf.status} />
-            )}
+            <PdfAction status={entry.pdf.status} entry={entry} form={form} variant="detail" />
           </div>
 
           <div className="rounded-2xl border border-border/60 bg-card p-5">

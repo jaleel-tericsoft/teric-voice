@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Building2, Mic, Mail, FileText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { organization } from "@/lib/mock-data";
+import { getVoiceSensitivity, setVoiceSensitivity, type VoiceSensitivity } from "@/lib/voice-client";
 
 const sections = [
   { id: "general", label: "General", icon: Building2 },
@@ -143,7 +144,30 @@ function GeneralSection() {
   );
 }
 
+const SENSITIVITY_LABELS: Record<VoiceSensitivity, string> = {
+  low: "Low — noisy rooms",
+  medium: "Medium — balanced (default)",
+  high: "High — quiet rooms",
+};
+
 function VoiceSection() {
+  // This one persists for real (localStorage), unlike the rest of this page
+  // — it's a per-device mic preference the voice session reads directly, not
+  // something that needs the Save Changes button.
+  const [sensitivity, setSensitivity] = useState<VoiceSensitivity>("medium");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setSensitivity(getVoiceSensitivity());
+  }, []);
+
+  function handleSensitivityChange(value: VoiceSensitivity) {
+    setSensitivity(value);
+    setVoiceSensitivity(value);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  }
+
   return (
     <div>
       <SectionHeader
@@ -165,6 +189,25 @@ function VoiceSection() {
         </Field>
         <Field label="Confidence Threshold">
           <Input type="number" defaultValue={85} min={0} max={100} className="rounded-xl" />
+        </Field>
+        <Field label="Microphone Sensitivity">
+          <Select value={sensitivity} onValueChange={handleSensitivityChange}>
+            <SelectTrigger className="w-full rounded-xl">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(SENSITIVITY_LABELS) as VoiceSensitivity[]).map((level) => (
+                <SelectItem key={level} value={level}>
+                  {SENSITIVITY_LABELS[level]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-[11px] text-muted-foreground">
+            {saved
+              ? "Saved — applies to your next voice session on this device."
+              : "Questions getting skipped from background noise? Try Low."}
+          </p>
         </Field>
       </div>
       <div className="mt-5">

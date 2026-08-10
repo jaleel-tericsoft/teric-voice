@@ -35,7 +35,11 @@ import {
   transcribeAudio,
   interpretAnswer,
   interpretReviewCommand,
-  SPEECH_LEVEL_THRESHOLD,
+  getVoiceSensitivity,
+  setVoiceSensitivity,
+  getSensitivityConfig,
+  createSustainedGate,
+  type VoiceSensitivity,
 } from "@/lib/voice-client";
 import { cn } from "@/lib/utils";
 import type { FormDefinition, FormQuestion } from "@/types";
@@ -45,15 +49,21 @@ const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
 const SUBMIT_INTENT_RE =
   /\b(submit|confirm(?:ed)?|that'?s (?:correct|right|it|all)|go ahead|looks good|yes,? submit)\b/i;
 
-// Require slightly more deliberate speech to interrupt the assistant than
-// to simply be picked up while listening — avoids stray noise cutting it off.
-const BARGE_IN_THRESHOLD = SPEECH_LEVEL_THRESHOLD * 1.3;
+// Require slightly louder speech to interrupt the assistant than to simply
+// be picked up while listening — avoids stray noise cutting it off.
+const BARGE_IN_LEVEL_MULTIPLIER = 1.3;
 
 const LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
   { value: "hi", label: "Hindi" },
 ] as const;
 type LanguageCode = (typeof LANGUAGE_OPTIONS)[number]["value"];
+
+const SENSITIVITY_OPTIONS: { value: VoiceSensitivity; label: string; hint: string }[] = [
+  { value: "low", label: "Low", hint: "Best in noisy rooms — needs louder, clearer speech." },
+  { value: "medium", label: "Medium", hint: "Balanced — the default for most spaces." },
+  { value: "high", label: "High", hint: "Best in quiet rooms — picks up soft speech faster." },
+];
 
 function isPaused(pausedRef: { current: boolean }, cancelledRef: { current: boolean }) {
   return new Promise<void>((resolve) => {
@@ -104,6 +114,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
   const [micError, setMicError] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [language, setLanguage] = useState<LanguageCode>("en");
+  const [sensitivity, setSensitivity] = useState<VoiceSensitivity>(() => getVoiceSensitivity());
 
   const pausedRef = useRef(paused);
   useEffect(() => {
@@ -136,15 +147,40 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     };
   }, []);
 
+  // Mirrors `sensitivity` for the listening loops below (which read a ref,
+  // not state, since they run inside a long-lived effect) — updates
+  // instantly if the user changes it mid-session from the control bar, and
+  // persists so it's remembered next time too.
+  const sensitivityRef = useRef(getSensitivityConfig(sensitivity));
+  useEffect(() => {
+    sensitivityRef.current = getSensitivityConfig(sensitivity);
+    setVoiceSensitivity(sensitivity);
+  }, [sensitivity]);
+
   useEffect(() => {
     if (!started) return;
 
     const cancelledRef = { current: false };
     const mic = micRef.current!;
+    const sensitivity = sensitivityRef.current;
+    const allQuestions = getAllQuestions(form);
 
-    function bargeInCheck() {
-      return !pausedRef.current && mic.getLevel() > BARGE_IN_THRESHOLD;
-    }
+    // Mutable, shared between askQuestion (reads it to spot corrections to
+    // earlier fields) and run() (writes it as each question gets answered).
+    // A ref rather than a `let` because askQuestion is defined before run()
+    // but needs to see answers as they land, not a stale empty snapshot.
+    const localRef: { current: AnswerMap } = { current: {} };
+
+    // Debounced: the raw level check must stay true continuously for
+    // bargeInSustainMs before this reports true, so a single stray noise
+    // frame while the assistant is talking doesn't cut it off.
+    const bargeInCheck = createSustainedGate(
+      () =>
+        !pausedRef.current &&
+        mic.getLevel(sensitivity.voiceBandMinRatio) >
+          sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
+      sensitivity.bargeInSustainMs
+    );
 
     async function speak(text: string): Promise<{ interrupted: boolean }> {
       setOrbState("speaking");
@@ -162,7 +198,11 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       setOrbState("listening");
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return "";
-      const clip = await mic.recordUntilSilence();
+      const clip = await mic.recordUntilSilence({
+        speechThreshold: sensitivity.speechThreshold,
+        voiceBandMinRatio: sensitivity.voiceBandMinRatio,
+        minSpeechMs: sensitivity.minSpeechMs,
+      });
       if (cancelledRef.current) return "";
       setOrbState("thinking");
       return transcribeAudio(clip, languageRef.current); // throws on failure
@@ -190,8 +230,42 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         });
 
         if (interpretation.off_topic) {
-          // Didn't attempt to answer at all — redirect, don't burn a
-          // confirmation round-trip on it.
+          // Doesn't answer the current question — but before assuming the
+          // user has wandered off-topic, check whether they're actually
+          // asking to correct something already answered ("actually, change
+          // my email to..."). If so, apply it immediately and pick back up
+          // on the current question, instead of redirecting them to repeat
+          // it later at the review screen.
+          const answeredFieldNames = Object.keys(localRef.current);
+          if (answeredFieldNames.length > 0) {
+            const correctionFields = allQuestions
+              .filter((aq) => answeredFieldNames.includes(aq.fieldName))
+              .map((aq) => ({
+                fieldName: aq.fieldName,
+                label: aq.questionText,
+                fieldType: aq.fieldType,
+                options: aq.options?.map((o) => o.value),
+                currentValue: localRef.current[aq.fieldName],
+              }));
+            const command = await interpretReviewCommand({ transcript, fields: correctionFields }).catch(
+              () => null
+            );
+            if (
+              command?.intent === "update_field" &&
+              command.field_name &&
+              answeredFieldNames.includes(command.field_name)
+            ) {
+              const fieldName = command.field_name;
+              localRef.current = { ...localRef.current, [fieldName]: command.value ?? "" };
+              setAnswers((prev) => ({ ...prev, [fieldName]: command.value ?? "" }));
+              await speak(command.spoken_reply || "Got it, updated.");
+              if (cancelledRef.current) return null;
+              continue; // resume asking the current question — nothing lost
+            }
+          }
+
+          // Genuinely off-topic — redirect, don't burn a confirmation
+          // round-trip on it.
           await speak(`Let's stay focused on the form. ${questionPrompt(q, 0)}`);
           continue;
         }
@@ -226,15 +300,12 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         return;
       }
 
-      const allQuestions = getAllQuestions(form);
-      let local: AnswerMap = {};
-
       try {
         for (const q of allQuestions) {
           if (cancelledRef.current) break;
           if (
             q.conditional &&
-            local[q.conditional.dependsOnFieldName] !== q.conditional.equals
+            localRef.current[q.conditional.dependsOnFieldName] !== q.conditional.equals
           ) {
             continue;
           }
@@ -244,7 +315,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
           if (cancelledRef.current) break;
 
           if (value !== null) {
-            local = { ...local, [q.fieldName]: value };
+            localRef.current = { ...localRef.current, [q.fieldName]: value };
             setAnswers((prev) => ({ ...prev, [q.fieldName]: value }));
           }
         }
@@ -283,10 +354,15 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     const cancelledRef = { current: false };
     const mic = micRef.current!;
     const reviewQuestions = getAllQuestions(form);
+    const sensitivity = sensitivityRef.current;
 
-    function bargeInCheck() {
-      return !pausedRef.current && mic.getLevel() > BARGE_IN_THRESHOLD;
-    }
+    const bargeInCheck = createSustainedGate(
+      () =>
+        !pausedRef.current &&
+        mic.getLevel(sensitivity.voiceBandMinRatio) >
+          sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
+      sensitivity.bargeInSustainMs
+    );
 
     async function speak(text: string) {
       setOrbState("speaking");
@@ -313,7 +389,11 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         await isPaused(pausedRef, cancelledRef);
         if (cancelledRef.current) return;
 
-        const clip = await mic.recordUntilSilence();
+        const clip = await mic.recordUntilSilence({
+          speechThreshold: sensitivity.speechThreshold,
+          voiceBandMinRatio: sensitivity.voiceBandMinRatio,
+          minSpeechMs: sensitivity.minSpeechMs,
+        });
         if (cancelledRef.current) return;
         if (clip.size < 4000) continue; // essentially silence — keep waiting
 
@@ -549,29 +629,55 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
                   </button>
                 </PopoverTrigger>
                 <PopoverContent align="end" side="top" className="w-64 border-none bg-background">
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">
-                      Spoken language
-                    </span>
-                    <Select
-                      value={language}
-                      onValueChange={(v) => setLanguage(v as LanguageCode)}
-                    >
-                      <SelectTrigger className="h-9 w-full rounded-lg">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {LANGUAGE_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-[11px] text-muted-foreground">
-                      Set to English by default — switch if you'd rather answer in another
-                      language.
-                    </p>
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Spoken language
+                      </span>
+                      <Select
+                        value={language}
+                        onValueChange={(v) => setLanguage(v as LanguageCode)}
+                      >
+                        <SelectTrigger className="h-9 w-full rounded-lg">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LANGUAGE_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">
+                        Set to English by default — switch if you'd rather answer in another
+                        language.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Microphone sensitivity
+                      </span>
+                      <Select
+                        value={sensitivity}
+                        onValueChange={(v) => setSensitivity(v as VoiceSensitivity)}
+                      >
+                        <SelectTrigger className="h-9 w-full rounded-lg">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SENSITIVITY_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">
+                        {SENSITIVITY_OPTIONS.find((o) => o.value === sensitivity)?.hint}
+                        {" "}Skipping questions in a noisy room? Try Low.
+                      </p>
+                    </div>
                   </div>
                 </PopoverContent>
               </Popover>

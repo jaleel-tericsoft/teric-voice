@@ -9,7 +9,12 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
+        // Teal/green is the app's single standard action color — same one
+        // used on "Start Voice Entry" — applied everywhere via this default
+        // variant so every primary button matches it without one-off
+        // overrides. Badges/status chips are a separate component and keep
+        // their own palette; this doesn't touch them.
+        default: "bg-teal text-teal-foreground hover:bg-teal/85",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

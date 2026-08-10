@@ -17,13 +17,6 @@ export interface ReviewCommand {
   spoken_reply: string;
 }
 
-/** Shared mic-level threshold (0..1) above which we consider the user to be
- * actively speaking — used both to detect the start of an answer and to
- * detect barge-in while the assistant is still talking. Paired with the
- * spectral gate in MicSession.getLevel(), so this only needs to separate
- * quiet vs. loud human speech, not speech vs. noise. */
-export const SPEECH_LEVEL_THRESHOLD = 0.035;
-
 // Human speech carries most of its energy in this band (fundamental +
 // lower formants). Environmental noise — fans, hums, traffic rumble, room
 // hiss — is usually concentrated below or above it, or spread flat across
@@ -31,7 +24,64 @@ export const SPEECH_LEVEL_THRESHOLD = 0.035;
 // loudness, is what stops the mic from "hearing" the room.
 const VOICE_BAND_LOW_HZ = 300;
 const VOICE_BAND_HIGH_HZ = 3400;
-const VOICE_BAND_MIN_RATIO = 0.45; // share of total energy that must sit in-band
+
+export type VoiceSensitivity = "low" | "medium" | "high";
+
+export interface SensitivityConfig {
+  /** Mic level (0..1) above which we consider the user to be speaking. */
+  speechThreshold: number;
+  /** Share of frequency energy that must sit in the voice band to count at all. */
+  voiceBandMinRatio: number;
+  /** How long the signal must stay above threshold before it counts as
+   * "the user started talking" — filters a brief background blip (a word
+   * from another room, a cough, a door) from triggering a false capture. */
+  minSpeechMs: number;
+  /** Same idea, for interrupting the assistant mid-question (barge-in) —
+   * deliberately a bit longer, since a false barge-in is more disruptive
+   * than a false silence-detection trigger. */
+  bargeInSustainMs: number;
+}
+
+// "Low" = least sensitive (best in noisy rooms — requires louder, longer,
+// more voice-shaped signal). "High" = most sensitive (best for quiet rooms
+// with a soft speaker, but more prone to picking up background sound).
+const SENSITIVITY_PRESETS: Record<VoiceSensitivity, SensitivityConfig> = {
+  low: { speechThreshold: 0.085, voiceBandMinRatio: 0.65, minSpeechMs: 320, bargeInSustainMs: 450 },
+  medium: { speechThreshold: 0.055, voiceBandMinRatio: 0.55, minSpeechMs: 200, bargeInSustainMs: 320 },
+  high: { speechThreshold: 0.03, voiceBandMinRatio: 0.42, minSpeechMs: 110, bargeInSustainMs: 200 },
+};
+
+const SENSITIVITY_STORAGE_KEY = "tericvoice:mic-sensitivity";
+
+export function getSensitivityConfig(level: VoiceSensitivity): SensitivityConfig {
+  return SENSITIVITY_PRESETS[level];
+}
+
+export function getVoiceSensitivity(): VoiceSensitivity {
+  if (typeof window === "undefined") return "medium";
+  const stored = window.localStorage.getItem(SENSITIVITY_STORAGE_KEY);
+  return stored === "low" || stored === "medium" || stored === "high" ? stored : "medium";
+}
+
+export function setVoiceSensitivity(level: VoiceSensitivity): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SENSITIVITY_STORAGE_KEY, level);
+}
+
+/** Wraps a boolean check so it only reports true once the underlying
+ * condition has held continuously for `sustainMs` — turns a single noisy
+ * frame into a debounced, much more reliable signal. */
+export function createSustainedGate(check: () => boolean, sustainMs: number) {
+  let trueSince: number | null = null;
+  return function poll(): boolean {
+    if (check()) {
+      if (trueSince === null) trueSince = Date.now();
+      return Date.now() - trueSince >= sustainMs;
+    }
+    trueSince = null;
+    return false;
+  };
+}
 
 /** Reads {error, detail} off a failed route response and throws a message
  * specific enough to show directly in the UI (e.g. the real upstream
@@ -209,8 +259,11 @@ export class MicSession {
   /** Current mic input level, 0..1, for driving a live waveform visual and
    * for speech/barge-in detection. Loud isn't enough to count as "level" —
    * the energy also has to be concentrated in the human-voice frequency
-   * band, so a fan, hum, or room noise spike doesn't register as speech. */
-  getLevel(): number {
+   * band, so a fan, hum, or room noise spike doesn't register as speech.
+   * `voiceBandMinRatio` controls how strict that spectral gate is — pass
+   * the current sensitivity preset's value (defaults to the "medium" preset
+   * if omitted, for callers that don't care about sensitivity). */
+  getLevel(voiceBandMinRatio = SENSITIVITY_PRESETS.medium.voiceBandMinRatio): number {
     if (!this.analyser || !this.audioContext) return 0;
     const freqData = new Uint8Array(this.analyser.frequencyBinCount);
     this.analyser.getByteFrequencyData(freqData);
@@ -229,7 +282,7 @@ export class MicSession {
     if (totalEnergy < 1e-6) return 0;
 
     const voiceRatio = voiceEnergy / totalEnergy;
-    if (voiceRatio < VOICE_BAND_MIN_RATIO) return 0; // noise-shaped, not voice-shaped
+    if (voiceRatio < voiceBandMinRatio) return 0; // noise-shaped, not voice-shaped
 
     const overallLevel = Math.sqrt(totalEnergy / freqData.length);
     return Math.min(1, overallLevel * 2.5);
@@ -239,11 +292,16 @@ export class MicSession {
     maxDurationMs?: number;
     silenceMs?: number;
     speechThreshold?: number;
+    voiceBandMinRatio?: number;
+    minSpeechMs?: number;
   } = {}): Promise<Blob> {
+    const defaults = SENSITIVITY_PRESETS.medium;
     const {
       maxDurationMs = 12000,
       silenceMs = 900, // shorter wait after the user stops = faster turnaround
-      speechThreshold = SPEECH_LEVEL_THRESHOLD,
+      speechThreshold = defaults.speechThreshold,
+      voiceBandMinRatio = defaults.voiceBandMinRatio,
+      minSpeechMs = defaults.minSpeechMs,
     } = opts;
     if (!this.stream) await this.init();
 
@@ -257,7 +315,11 @@ export class MicSession {
     };
 
     return new Promise<Blob>((resolve) => {
+      // hasSpoken only flips once the signal has stayed above threshold
+      // continuously for minSpeechMs — a single loud frame (a cough, a word
+      // from another room) no longer counts as "the user started talking".
       let hasSpoken = false;
+      let aboveThresholdSince: number | null = null;
       let silenceStartedAt: number | null = null;
       const startedAt = Date.now();
 
@@ -266,17 +328,23 @@ export class MicSession {
       const tick = () => {
         if (recorder.state !== "recording") return;
 
-        const level = this.getLevel();
+        const level = this.getLevel(voiceBandMinRatio);
         const now = Date.now();
 
         if (level > speechThreshold) {
-          hasSpoken = true;
+          if (!hasSpoken) {
+            if (aboveThresholdSince === null) aboveThresholdSince = now;
+            if (now - aboveThresholdSince >= minSpeechMs) hasSpoken = true;
+          }
           silenceStartedAt = null;
-        } else if (hasSpoken) {
-          if (silenceStartedAt === null) silenceStartedAt = now;
-          if (now - silenceStartedAt >= silenceMs) {
-            recorder.stop();
-            return;
+        } else {
+          aboveThresholdSince = null;
+          if (hasSpoken) {
+            if (silenceStartedAt === null) silenceStartedAt = now;
+            if (now - silenceStartedAt >= silenceMs) {
+              recorder.stop();
+              return;
+            }
           }
         }
 

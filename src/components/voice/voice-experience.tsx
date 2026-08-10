@@ -280,12 +280,19 @@ export function VoiceExperience({
     };
   }, []);
 
-  // Not user-configurable — fixed to the "low" preset, which is the most
-  // resistant to picking up other people talking nearby: it requires
-  // louder, longer, more clearly voice-shaped speech before treating
-  // anything as "the user is talking", which is what actually stops
-  // background conversations from being mistaken for an answer.
-  const sensitivityRef = useRef(getSensitivityConfig("low"));
+  // Not user-configurable. "low" turned out to be too strict for real use:
+  // the mic only stops recording once its own energy/duration gate decides
+  // the user has spoken and gone quiet again — if a genuine (but quieter,
+  // shorter, or slightly muffled) answer never clears that bar, the
+  // recording just keeps running with no feedback, the user repeats
+  // themselves thinking it wasn't heard, and the eventual clip — one
+  // continuous recording spanning both attempts — gets transcribed with the
+  // answer duplicated in it. Most of what "low" was chasing (background
+  // voices triggering false interruptions) turned out to be a stale-timer
+  // bug in the barge-in debounce, not a threshold problem — that's fixed
+  // separately now, so "medium" is a safer default: still debounced against
+  // brief noise, but far less likely to miss the user's own voice.
+  const sensitivityRef = useRef(getSensitivityConfig("medium"));
 
   useEffect(() => {
     if (!started) return;

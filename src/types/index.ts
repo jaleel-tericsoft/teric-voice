@@ -67,6 +67,11 @@ export interface FormQuestion {
   options?: QuestionOption[];
   voiceGuidance?: string;
   conditional?: ConditionalRule;
+  /** Only meaningful for fieldType "date" — "past" rejects a date after
+   * today (e.g. "when was it last serviced" can't be in the future),
+   * "future" rejects a date before today (e.g. a preferred appointment
+   * date). Undefined means no constraint. */
+  dateConstraint?: "past" | "future";
 }
 
 export interface FormSection {

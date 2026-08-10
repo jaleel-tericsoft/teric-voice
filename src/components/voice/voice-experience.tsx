@@ -87,6 +87,45 @@ function normalizeDistanceValue(
   return String(Math.round(raw * KM_TO_MILES));
 }
 
+// Broader than the skip/submit phrases on purpose — someone asking to save
+// and step away tends to phrase it more like an aside than a command
+// ("I have an emergency, can I save this and come back later?"), so this
+// leans on a wider net of natural ways to say it rather than one exact form.
+const SAVE_DRAFT_RE =
+  /\bsave\b.*\b(draft|later|exit)\b|\b(draft|exit)\b.*\bsave\b|\bsave (?:my|this) progress\b|\bcome back later\b|\b(finish|continue) (?:this )?later\b|\bi(?:'ve| have) (?:got )?an emergency\b|\b(?:i need to|i've got to|i have to) (?:go|leave|step away)\b|\bsomething(?:'s| has) come up\b/i;
+
+function isSaveDraftCommand(transcript: string): boolean {
+  const trimmed = transcript.trim();
+  if (!trimmed) return false;
+  if (trimmed.split(/\s+/).length > 20) return false; // generous — these run longer than a bare command
+  return SAVE_DRAFT_RE.test(trimmed);
+}
+
+/** Politely flags a date that breaks its field's constraint (e.g. a "last
+ * serviced" date that's somehow in the future) instead of silently
+ * accepting something that can't be true. Returns null when the date is
+ * fine, unparseable (let the normal flow handle that), or the field has no
+ * constraint. */
+function dateConstraintMessage(
+  constraint: FormQuestion["dateConstraint"],
+  isoDate: string
+): string | null {
+  if (!constraint) return null;
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+
+  if (constraint === "past" && date.getTime() > today.getTime()) {
+    return "That date's actually in the future, and this needs to be one that's already happened — let's try that again.";
+  }
+  if (constraint === "future" && date.getTime() < today.getTime()) {
+    return "That date's already passed — let's get one that's still ahead of us.";
+  }
+  return null;
+}
+
 let entryIdCounter = 0;
 function generateEntryId(): string {
   entryIdCounter += 1;
@@ -231,6 +270,27 @@ export function VoiceExperience({
   // instead of creating duplicates.
   const entryIdRef = useRef(resumeEntry?.id ?? generateEntryId());
   const createdAtRef = useRef(resumeEntry?.createdAt ?? new Date().toISOString());
+
+  /** Persists whatever's been answered so far as an in-progress entry and
+   * exits — the entry shows up in Entries with a "Resume" action that
+   * reopens this exact session and picks up on the first unanswered field.
+   * Takes the answers explicitly rather than reading `answers` state
+   * directly, since the long-running conversation/review effects only ever
+   * see the snapshot from when they started — this always gets whatever's
+   * actually current, whether called from a button click or from inside
+   * one of those effects (via localRef.current / answersRef.current). */
+  function saveDraftAndExit(currentAnswers: AnswerMap) {
+    const entry = buildEntry({
+      id: entryIdRef.current,
+      form,
+      answers: currentAnswers,
+      status: "in_progress",
+      createdAt: createdAtRef.current,
+      previous: resumeEntry,
+    });
+    upsertEntry(entry);
+    router.push("/entries");
+  }
 
   const [started, setStarted] = useState(false);
   const [phase, setPhase] = useState<"conversation" | "review" | "submitting">(
@@ -406,6 +466,17 @@ export function VoiceExperience({
 
         if (!transcript.trim()) continue; // genuine silence — repeat the question
 
+        if (isSaveDraftCommand(transcript)) {
+          // A real, possibly urgent request to step away — reassure them
+          // first, then actually save and leave, not just acknowledge it.
+          await speak(
+            "Of course — please don't worry about it. I've saved everything as a draft, so you can come back and pick up right where you left off whenever you're ready."
+          );
+          saveDraftAndExit(localRef.current);
+          cancelledRef.current = true; // stop the rest of this run — we've already navigated away
+          return null;
+        }
+
         if (isSkipCommand(transcript)) {
           if (!q.required) {
             await speak("No problem, skipping that one.");
@@ -509,10 +580,17 @@ export function VoiceExperience({
                     options: target.options?.map((o) => o.value),
                     transcript: targetTranscript,
                   }).catch(() => null);
+                  const targetDateIssue =
+                    targetInterpretation &&
+                    target.fieldType === "date" &&
+                    typeof targetInterpretation.value === "string"
+                      ? dateConstraintMessage(target.dateConstraint, targetInterpretation.value)
+                      : null;
                   if (
                     targetInterpretation &&
                     !targetInterpretation.off_topic &&
-                    !targetInterpretation.needs_clarification
+                    !targetInterpretation.needs_clarification &&
+                    !targetDateIssue
                   ) {
                     const targetValue = normalizeDistanceValue(
                       targetInterpretation.value,
@@ -544,6 +622,15 @@ export function VoiceExperience({
           overridePrompt = `No worries — let's get back to the form. ${questionPrompt(q, 0)}`;
           attempt--; // an off-topic remark isn't a failed attempt at this question
           continue;
+        }
+
+        if (q.fieldType === "date" && typeof interpretation.value === "string") {
+          const dateIssue = dateConstraintMessage(q.dateConstraint, interpretation.value);
+          if (dateIssue) {
+            overridePrompt = `${dateIssue} ${questionPrompt(q, 0)}`;
+            attempt--; // a sensible date constraint isn't a failed attempt at answering
+            continue;
+          }
         }
 
         if (!interpretation.needs_clarification) {
@@ -681,6 +768,15 @@ export function VoiceExperience({
         if (cancelledRef.current) return;
         if (!transcript.trim()) continue;
 
+        if (isSaveDraftCommand(transcript)) {
+          await speak(
+            "Of course — please don't worry about it. I've saved everything as a draft, so you can come back and pick up right where you left off whenever you're ready."
+          );
+          saveDraftAndExit(answersRef.current);
+          cancelledRef.current = true;
+          return;
+        }
+
         const fields = reviewQuestions.map((q) => ({
           fieldName: q.fieldName,
           label: q.questionText,
@@ -771,20 +867,8 @@ export function VoiceExperience({
     setAnswers((prev) => ({ ...prev, [fieldName]: value }));
   }
 
-  /** Persists whatever's been answered so far as an in-progress entry and
-   * exits — the entry shows up in Entries with a "Resume" action that
-   * reopens this exact session and picks up on the first unanswered field. */
   function handleSaveDraft() {
-    const entry = buildEntry({
-      id: entryIdRef.current,
-      form,
-      answers,
-      status: "in_progress",
-      createdAt: createdAtRef.current,
-      previous: resumeEntry,
-    });
-    upsertEntry(entry);
-    router.push("/entries");
+    saveDraftAndExit(answers);
   }
 
   async function handleSubmit() {

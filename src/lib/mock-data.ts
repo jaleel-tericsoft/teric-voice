@@ -136,6 +136,7 @@ export const vehicleServiceForm: FormDefinition = {
               questionText: "What is the preferred date to have the service completed by?",
               fieldType: "date",
               required: false,
+              dateConstraint: "future",
             },
           ],
         },
@@ -173,6 +174,7 @@ export const vehicleServiceForm: FormDefinition = {
               questionText: "When was the vehicle last serviced?",
               fieldType: "date",
               required: false,
+              dateConstraint: "past",
             },
             {
               id: "q_known_issues",

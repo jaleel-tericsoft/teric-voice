@@ -209,10 +209,19 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     }
 
     async function askQuestion(q: FormQuestion): Promise<string | boolean | null> {
+      // Each attempt normally re-reads questionPrompt(q, attempt), which
+      // prefixes retries with "Sorry, I didn't catch that" — appropriate
+      // when nothing was heard. After a correction to an earlier answer,
+      // though, the agent heard them just fine; this overrides the next
+      // prompt with a natural "let's continue" instead of implying it
+      // failed to listen.
+      let overridePrompt: string | null = null;
+
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (cancelledRef.current) return null;
 
-        await speak(questionPrompt(q, attempt));
+        await speak(overridePrompt ?? questionPrompt(q, attempt));
+        overridePrompt = null;
         if (cancelledRef.current) return null;
 
         const transcript = await listenAndTranscribe();
@@ -258,9 +267,12 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
               const fieldName = command.field_name;
               localRef.current = { ...localRef.current, [fieldName]: command.value ?? "" };
               setAnswers((prev) => ({ ...prev, [fieldName]: command.value ?? "" }));
-              await speak(command.spoken_reply || "Got it, updated.");
-              if (cancelledRef.current) return null;
-              continue; // resume asking the current question — nothing lost
+              // One natural line — confirm the change, then pick the
+              // current question back up — rather than a robotic "sorry I
+              // didn't catch that" retry.
+              overridePrompt = `${command.spoken_reply || "Got it, updated."} Let's continue — ${questionPrompt(q, 0)}`;
+              attempt--; // a correction isn't a failed attempt at this question — don't burn a retry on it
+              continue;
             }
           }
 

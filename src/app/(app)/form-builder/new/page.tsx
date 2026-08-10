@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Plus, Trash2, GripVertical, CheckCheck } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, GripVertical, CheckCheck, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -73,15 +73,53 @@ function needsOptions(type: FieldType) {
   return type === "single_select" || type === "multi_select";
 }
 
-export default function NewFormPage() {
-  const router = useRouter();
-  const { addForm, forms } = useFormsStore();
+/** Reverse of the draft->FormDefinition build below — turns an existing
+ * form's latest version back into editable draft state. */
+function sectionsFromForm(form: FormDefinition): DraftSection[] {
+  const latest =
+    form.versions.find((v) => v.version === form.currentVersion) ??
+    form.versions[form.versions.length - 1];
+  if (!latest || latest.sections.length === 0) return [newSection(1)];
 
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [status, setStatus] = useState<FormStatus>("draft");
-  const [sections, setSections] = useState<DraftSection[]>([newSection(1)]);
-  const [entryColumns, setEntryColumns] = useState<string[]>([]);
+  return latest.sections.map((s) => ({
+    id: s.id,
+    title: s.title,
+    questions: s.questions.map((q) => ({
+      id: q.id,
+      questionText: q.questionText,
+      fieldType: q.fieldType,
+      required: q.required,
+      optionsText: q.options?.map((o) => o.label).join(", ") ?? "",
+    })),
+  }));
+}
+
+export default function NewFormPage() {
+  return (
+    <Suspense fallback={null}>
+      <NewFormPageContent />
+    </Suspense>
+  );
+}
+
+function NewFormPageContent() {
+  const router = useRouter();
+  const { addForm, updateForm, forms, getFormByFormId } = useFormsStore();
+
+  const searchParams = useSearchParams();
+  const editFormId = searchParams.get("edit");
+  const editingForm = editFormId ? getFormByFormId(editFormId) : undefined;
+  const isEditing = Boolean(editingForm);
+
+  const [name, setName] = useState(() => editingForm?.name ?? "");
+  const [description, setDescription] = useState(() => editingForm?.description ?? "");
+  const [status, setStatus] = useState<FormStatus>(() => editingForm?.status ?? "draft");
+  const [sections, setSections] = useState<DraftSection[]>(() =>
+    editingForm ? sectionsFromForm(editingForm) : [newSection(1)]
+  );
+  const [entryColumns, setEntryColumns] = useState<string[]>(
+    () => editingForm?.entryListColumns ?? []
+  );
 
   // fieldName is derived from question text, recomputed on every render —
   // keeps the entry-list-column picker (and the final saved form) in sync
@@ -144,13 +182,8 @@ export default function NewFormPage() {
     );
   }
 
-  function handleCreate() {
+  function handleSave() {
     if (!canCreate) return;
-
-    let formIdSlug = slugify(name);
-    if (forms.some((f) => f.formId === formIdSlug)) {
-      formIdSlug = `${formIdSlug}_${Date.now().toString(36)}`;
-    }
 
     const builtSections: FormSection[] = sections
       .filter((s) => s.questions.some((q) => q.questionText.trim()))
@@ -179,6 +212,32 @@ export default function NewFormPage() {
 
     const now = new Date().toISOString();
     const columns = entryColumns.length > 0 ? entryColumns : allFields.slice(0, 4).map((f) => f.fieldName);
+
+    if (editingForm) {
+      // Keep the same id/formId (and version history) — editing a form
+      // shouldn't change its URL or reset its entries. The questions just
+      // become a new version, same convention as the seeded sample forms.
+      const nextVersion = editingForm.currentVersion + 1;
+      updateForm(editingForm.id, {
+        name: name.trim(),
+        description: description.trim(),
+        status,
+        updatedAt: now,
+        entryListColumns: columns,
+        currentVersion: nextVersion,
+        versions: [
+          ...editingForm.versions,
+          { id: uid("fv"), version: nextVersion, publishedAt: now, sections: builtSections },
+        ],
+      });
+      router.push("/form-builder");
+      return;
+    }
+
+    let formIdSlug = slugify(name);
+    if (forms.some((f) => f.formId === formIdSlug)) {
+      formIdSlug = `${formIdSlug}_${Date.now().toString(36)}`;
+    }
 
     const newForm: FormDefinition = {
       id: uid("form"),
@@ -214,9 +273,13 @@ export default function NewFormPage() {
           <ArrowLeft className="size-4" />
         </Link>
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-foreground">Create Form</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">
+            {isEditing ? `Edit ${editingForm!.name}` : "Create Form"}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Define what your voice assistant should ask, then publish it.
+            {isEditing
+              ? "Changes save as a new version of this form."
+              : "Define what your voice assistant should ask, then publish it."}
           </p>
         </div>
       </div>
@@ -256,6 +319,9 @@ export default function NewFormPage() {
                 <SelectItem value="inactive">Inactive</SelectItem>
               </SelectContent>
             </Select>
+            <p className="text-[11px] text-muted-foreground">
+              Only Active forms can be voice-filled. Draft and Inactive both block new entries.
+            </p>
           </div>
         </div>
       </div>
@@ -428,9 +494,18 @@ export default function NewFormPage() {
         <Button variant="ghost" asChild className="rounded-full">
           <Link href="/form-builder">Cancel</Link>
         </Button>
-        <Button disabled={!canCreate} onClick={handleCreate} className="rounded-full">
-          <CheckCheck className="size-4" />
-          Create Form
+        <Button disabled={!canCreate} onClick={handleSave} className="rounded-full">
+          {status === "draft" ? (
+            <>
+              <Save className="size-4" />
+              Save as Draft
+            </>
+          ) : (
+            <>
+              <CheckCheck className="size-4" />
+              {isEditing ? "Save & Publish" : "Publish Form"}
+            </>
+          )}
         </Button>
       </div>
     </div>

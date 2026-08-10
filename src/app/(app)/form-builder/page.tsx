@@ -23,7 +23,7 @@ const statusStyles: Record<string, string> = {
 };
 
 export default function FormBuilderPage() {
-  const { forms } = useFormsStore();
+  const { forms, setFormStatus } = useFormsStore();
 
   return (
     <div className="flex flex-col gap-5 pt-6">
@@ -63,16 +63,23 @@ export default function FormBuilderPage() {
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuItem className="px-2 py-1.5">
-                      <ListTree className="size-4" />
-                      Edit Questions
+                    <DropdownMenuItem className="px-2 py-1.5" asChild>
+                      <Link href={`/form-builder/new?edit=${form.formId}`}>
+                        <ListTree className="size-4" />
+                        Edit Questions
+                      </Link>
                     </DropdownMenuItem>
-                    <DropdownMenuItem className="px-2 py-1.5">
+                    <DropdownMenuItem className="px-2 py-1.5" disabled>
                       <Copy className="size-4" />
                       Duplicate
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem className="px-2 py-1.5">
+                    <DropdownMenuItem
+                      className="px-2 py-1.5"
+                      onClick={() =>
+                        setFormStatus(form.id, form.status === "active" ? "inactive" : "active")
+                      }
+                    >
                       <Power className="size-4" />
                       {form.status === "active" ? "Deactivate" : "Activate"}
                     </DropdownMenuItem>

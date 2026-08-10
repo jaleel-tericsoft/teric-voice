@@ -35,12 +35,27 @@ function EntriesPageContent() {
             All entries created across your forms.
           </p>
         </div>
-        <Button asChild className="rounded-full">
-          <Link href={`/voice/new?form=${activeForm.formId}`}>
+        {activeForm.status === "active" ? (
+          <Button asChild className="rounded-full">
+            <Link href={`/voice/new?form=${activeForm.formId}`}>
+              <Plus className="size-4" />
+              New Entry
+            </Link>
+          </Button>
+        ) : (
+          <Button
+            disabled
+            className="rounded-full"
+            title={
+              activeForm.status === "draft"
+                ? "Publish this form from Form Builder before adding entries"
+                : "This form is deactivated and isn't accepting entries"
+            }
+          >
             <Plus className="size-4" />
             New Entry
-          </Link>
-        </Button>
+          </Button>
+        )}
       </div>
 
       {/* Form tabs */}

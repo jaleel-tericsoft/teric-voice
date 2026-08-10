@@ -7,11 +7,13 @@
 
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { forms as seedForms } from "@/lib/mock-data";
-import type { FormDefinition } from "@/types";
+import type { FormDefinition, FormStatus } from "@/types";
 
 interface FormsStore {
   forms: FormDefinition[];
   addForm: (form: FormDefinition) => void;
+  updateForm: (id: string, patch: Partial<FormDefinition>) => void;
+  setFormStatus: (id: string, status: FormStatus) => void;
   getFormByFormId: (formId: string) => FormDefinition | undefined;
 }
 
@@ -24,6 +26,14 @@ export function FormsProvider({ children }: { children: ReactNode }) {
     () => ({
       forms,
       addForm: (form) => setForms((prev) => [...prev, form]),
+      updateForm: (id, patch) =>
+        setForms((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f))),
+      setFormStatus: (id, status) =>
+        setForms((prev) =>
+          prev.map((f) =>
+            f.id === id ? { ...f, status, updatedAt: new Date().toISOString() } : f
+          )
+        ),
       getFormByFormId: (formId) => forms.find((f) => f.formId === formId),
     }),
     [forms]

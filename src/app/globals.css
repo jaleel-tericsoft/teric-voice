@@ -192,6 +192,26 @@
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
+  /* Wide tables (entries table) overflow horizontally by design — sticky
+   * columns pin the identifying/action columns while the rest scrolls.
+   * macOS/most OSes hide overlay scrollbars until you interact, which
+   * made that scrollable area read as "columns went missing" rather than
+   * "scroll for more" — this keeps a slim scrollbar always visible as
+   * that affordance. */
+  .always-scrollbar {
+    scrollbar-width: thin;
+  }
+  .always-scrollbar::-webkit-scrollbar {
+    height: 8px;
+    display: block;
+  }
+  .always-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .always-scrollbar::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 9999px;
+  }
 }
 
 /* Voice orb animations */

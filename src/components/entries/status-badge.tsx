@@ -38,8 +38,9 @@ const entryStatusConfig: Record<
 // Every status other than draft/in_progress represents a finished
 // conversation (submitted, however far it's gotten through PDF/email) —
 // grouped down to two states wherever the table just needs "is this one
-// still being worked on or not".
-const IN_PROGRESS_STATUSES: EntryStatus[] = ["draft", "in_progress"];
+// still being worked on or not". Exported so the entries table's Status
+// filter/sort can group entries the same way this badge displays them.
+export const IN_PROGRESS_STATUSES: EntryStatus[] = ["draft", "in_progress"];
 
 export function EntryStatusBadge({
   status,

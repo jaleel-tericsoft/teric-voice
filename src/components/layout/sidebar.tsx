@@ -8,9 +8,12 @@ import {
   ClipboardList,
   Settings,
   Mic,
+  Bell,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { StartVoiceFormButton } from "@/components/layout/start-voice-form-button";
+import { ProfileMenu } from "@/components/layout/profile-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const primaryNav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
@@ -62,8 +65,36 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="mt-auto pt-6">
-        <StartVoiceFormButton className="flex w-full items-center justify-center gap-2 rounded-full bg-teal px-4 py-3 text-[14px] font-semibold text-teal-foreground transition-transform hover:bg-[#18464d] active:scale-[0.98]" />
+      {/* Account footer — profile (with Profile/Change Password in its
+       * dropdown), notifications, and logout, now that there's no topbar
+       * to host them. */}
+      <div className="mt-auto flex items-center gap-1 border-t border-sidebar-foreground/10 pt-4">
+        <ProfileMenu />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="relative flex size-9 shrink-0 items-center justify-center rounded-xl text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <Bell className="size-[17px]" strokeWidth={2} />
+              <span className="absolute right-2 top-2 size-1.5 rounded-full bg-teal" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Notifications</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Link
+              href="/login"
+              aria-label="Logout"
+              className="flex size-9 shrink-0 items-center justify-center rounded-xl text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <LogOut className="size-[17px]" strokeWidth={2} />
+            </Link>
+          </TooltipTrigger>
+          <TooltipContent side="top">Logout</TooltipContent>
+        </Tooltip>
       </div>
     </aside>
   );

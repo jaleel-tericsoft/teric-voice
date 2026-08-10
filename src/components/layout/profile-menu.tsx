@@ -1,6 +1,6 @@
 "use client";
 
-import { User, KeyRound, LogOut, ChevronDown } from "lucide-react";
+import { User, KeyRound, ChevronsUpDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,23 +21,34 @@ function initials(name: string) {
     .toUpperCase();
 }
 
+/** Sidebar footer's account trigger — avatar, name, and email, opening a
+ * menu with Profile and Change Password. Logout lives as its own button
+ * next to this one in the sidebar, not nested in here. */
 export function ProfileMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition-colors hover:bg-muted"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent"
         >
-          <Avatar size="sm">
+          <Avatar size="sm" className="shrink-0">
             <AvatarFallback className="bg-teal text-teal-foreground font-semibold">
               {initials(currentUser.name)}
             </AvatarFallback>
           </Avatar>
-          <ChevronDown className="size-3.5 text-muted-foreground" />
+          <span className="flex min-w-0 flex-1 flex-col leading-tight">
+            <span className="truncate text-[13px] font-semibold text-sidebar-foreground">
+              {currentUser.name}
+            </span>
+            <span className="truncate text-[11px] text-sidebar-foreground/50">
+              {currentUser.email}
+            </span>
+          </span>
+          <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/40" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent align="start" side="top" className="w-56">
         <DropdownMenuLabel className="flex flex-col gap-0.5 px-2 py-1.5">
           <span className="text-sm font-semibold text-foreground">
             {currentUser.name}
@@ -54,11 +65,6 @@ export function ProfileMenu() {
         <DropdownMenuItem className="px-2 py-1.5">
           <KeyRound className="size-4" />
           Change Password
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" className="px-2 py-1.5">
-          <LogOut className="size-4" />
-          Logout
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

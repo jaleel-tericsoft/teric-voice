@@ -81,14 +81,43 @@ export function getAnswerValue(
   return String(found.value);
 }
 
-/** Powers the topbar's global search: true if `query` shows up anywhere a
- * user would recognise the entry by — its ID, its status, or any answer
- * value (formatted the same way the table displays it). Case-insensitive,
- * substring match. */
-export function entryMatchesQuery(form: FormDefinition, entry: Entry, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  if (entry.id.toLowerCase().includes(q)) return true;
-  if (entry.status.replace(/_/g, " ").toLowerCase().includes(q)) return true;
-  return entry.answers.some((a) => formatAnswerValue(form, a).toLowerCase().includes(q));
+export interface EntryColumnDef {
+  /** Matches a FormQuestion.fieldName for data columns, or one of the
+   * fixed pseudo-columns ("id" / "createdAt" / "email" / "status" /
+   * "actions") for the ones that aren't driven by form questions. */
+  key: string;
+  label: string;
+  /** Always shown — the Columns drawer lists it disabled/checked rather
+   * than letting it be hidden, since the row would be unidentifiable or
+   * unactionable without it. */
+  mandatory: boolean;
+}
+
+/** The full, ordered set of columns the entries table can show — drives
+ * both the table itself and the Columns drawer's checkbox list, so the
+ * two never drift out of sync. */
+export function getEntryTableColumns(form: FormDefinition): EntryColumnDef[] {
+  const [firstCol, ...restCols] = form.entryListColumns;
+  const cols: EntryColumnDef[] = [{ key: "id", label: "Entry ID", mandatory: true }];
+  if (firstCol) {
+    cols.push({
+      key: firstCol,
+      label: findQuestion(form, firstCol)?.columnLabel ?? shortLabel(firstCol),
+      mandatory: true,
+    });
+  }
+  for (const col of restCols) {
+    cols.push({
+      key: col,
+      label: findQuestion(form, col)?.columnLabel ?? shortLabel(col),
+      mandatory: false,
+    });
+  }
+  cols.push(
+    { key: "createdAt", label: "Entry Date", mandatory: false },
+    { key: "email", label: "Email", mandatory: false },
+    { key: "status", label: "Status", mandatory: false },
+    { key: "actions", label: "Actions", mandatory: true }
+  );
+  return cols;
 }

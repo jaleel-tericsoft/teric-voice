@@ -63,7 +63,9 @@ Field type value expectations:
 - yes_no: boolean
 - single_select: must exactly match one of the given option values
 - date: ISO format YYYY-MM-DD
-- phone, number, short_text, long_text, email: cleaned-up text (e.g. spelled-out emails like "ahmed dot khan at example dot com" become "ahmed.khan@example.com")`;
+- phone, number, short_text, long_text, email: cleaned-up text (e.g. spelled-out emails like "ahmed dot khan at example dot com" become "ahmed.khan@example.com")
+
+Tone for anything spoken back (clarification_question, explanation): warm, friendly, and polite — like a helpful person, never curt, commanding, or scolding. Calm and genuine, no exclamation marks or forced enthusiasm.`;
 
 export async function POST(req: NextRequest) {
   if (!process.env.OPENAI_API_KEY) {

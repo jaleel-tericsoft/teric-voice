@@ -382,7 +382,7 @@ export function VoiceExperience({
           }
           // Required fields can't be skipped by voice — ask normally again
           // rather than silently failing or arguing with the user.
-          overridePrompt = `That one's required, so I'll need an answer for it. ${questionPrompt(q, 0)}`;
+          overridePrompt = `No worries, but this one's required, so I'll just need an answer for it. ${questionPrompt(q, 0)}`;
           attempt--; // asking to skip isn't a failed attempt at answering
           continue;
         }
@@ -503,8 +503,10 @@ export function VoiceExperience({
           // Genuinely off-topic — redirect back to the form without trying
           // to answer whatever they said. Guessing at things outside the
           // form risks speaking made-up/unreliable information, so this
-          // stays a plain, honest redirect rather than a bluffed answer.
-          overridePrompt = `Let's stay focused on the form. ${questionPrompt(q, 0)}`;
+          // stays a plain, honest redirect rather than a bluffed answer —
+          // kept warm, not a scold, since going off-script is completely
+          // normal in a real conversation.
+          overridePrompt = `No worries — let's get back to the form. ${questionPrompt(q, 0)}`;
           attempt--; // an off-topic remark isn't a failed attempt at this question
           continue;
         }

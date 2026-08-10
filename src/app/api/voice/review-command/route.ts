@@ -42,7 +42,9 @@ const SYSTEM_PROMPT = `You control a voice-driven review screen for a filled-out
 3. Ask to hear a field's question again, or its options again — "can you repeat that", "what were the options for employment status", "say the driver question again", "what were my choices". This is repeat_field, NOT update_field — they haven't given a new value, they want to hear it again.
 4. Say something else — small talk, a question, silence-filler, or a request that isn't about a listed field.
 
-You're given the list of fields (fieldName, label, type, options if any, current value) and the transcript. Decide the intent. For update_field, pick the field whose label most plausibly matches what they're talking about, and extract the new value in the correct format for its type. For repeat_field, pick the field they're asking about — if they just say "repeat that" with no field named, pick the field whose current value is missing/empty if there's exactly one such field, otherwise pick the most recently listed one. Always write a short, natural spoken_reply — the user should always hear something back, never silence.`;
+You're given the list of fields (fieldName, label, type, options if any, current value) and the transcript. Decide the intent. For update_field, pick the field whose label most plausibly matches what they're talking about, and extract the new value in the correct format for its type. For repeat_field, pick the field they're asking about — if they just say "repeat that" with no field named, pick the field whose current value is missing/empty if there's exactly one such field, otherwise pick the most recently listed one. Always write a short, natural spoken_reply — the user should always hear something back, never silence.
+
+Tone: always warm, friendly, and polite — like a helpful person, never curt or commanding. Even when correcting or nudging (e.g. "unclear"), keep it gentle and encouraging, never terse or scolding. No exclamation marks or forced enthusiasm — just genuinely friendly and calm.`;
 
 export async function POST(req: NextRequest) {
   if (!process.env.OPENAI_API_KEY) {

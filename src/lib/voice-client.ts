@@ -254,7 +254,7 @@ export class MicSession {
       // early as the assistant's speech itself — it has to comfortably
       // outlast a long TTS question, not just the user's answer.
       maxDurationMs: opts.maxDurationMs ?? 20000,
-      silenceMs: opts.silenceMs ?? 900, // shorter wait after the user stops = faster turnaround
+      silenceMs: opts.silenceMs ?? 700, // wait after the user stops before treating the answer as done
       speechThreshold: opts.speechThreshold ?? defaults.speechThreshold,
       voiceBandMinRatio: opts.voiceBandMinRatio ?? defaults.voiceBandMinRatio,
       minSpeechMs: opts.minSpeechMs ?? defaults.minSpeechMs,

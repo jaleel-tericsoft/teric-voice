@@ -108,9 +108,13 @@ function buildEntry(params: {
   };
 }
 
-// Require slightly louder speech to interrupt the assistant than to simply
-// be picked up while listening — avoids stray noise cutting it off.
-const BARGE_IN_LEVEL_MULTIPLIER = 1.3;
+// Require noticeably louder speech to interrupt the assistant than to
+// simply be picked up while listening. This has to clear more than plain
+// stray noise — it has to be well above whatever echo of the assistant's
+// own TTS voice leaks back into the mic on a speaker (not headphones),
+// since that echo is just as "voice-shaped" as a real interruption and the
+// spectral gate alone can't tell the two apart.
+const BARGE_IN_LEVEL_MULTIPLIER = 1.8;
 
 const LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
@@ -308,17 +312,6 @@ export function VoiceExperience({
       current: new Set(Object.keys(answers)),
     };
 
-    // Debounced: the raw level check must stay true continuously for
-    // bargeInSustainMs before this reports true, so a single stray noise
-    // frame while the assistant is talking doesn't cut it off.
-    const bargeInCheck = createSustainedGate(
-      () =>
-        !pausedRef.current &&
-        mic.getLevel(sensitivity.voiceBandMinRatio) >
-          sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
-      sensitivity.bargeInSustainMs
-    );
-
     async function speak(text: string): Promise<{ interrupted: boolean }> {
       setOrbState("speaking");
       setAssistantText(text);
@@ -336,6 +329,21 @@ export function VoiceExperience({
         voiceBandMinRatio: sensitivity.voiceBandMinRatio,
         minSpeechMs: sensitivity.minSpeechMs,
       }).catch(() => {});
+      // Built fresh for every call, not once for the whole session — a
+      // sustained gate remembers "how long has this been true" in its own
+      // closure, and reusing one across many separate playbacks let a stale
+      // timestamp from an earlier, incomplete trigger (say, a blip near the
+      // end of the previous question) instantly satisfy the sustain window
+      // the moment ANY level crossed threshold again — cutting the very
+      // next question off after a single word instead of requiring a fresh
+      // sustained trigger.
+      const bargeInCheck = createSustainedGate(
+        () =>
+          !pausedRef.current &&
+          mic.getLevel(sensitivity.voiceBandMinRatio) >
+            sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
+        sensitivity.bargeInSustainMs
+      );
       // shouldInterrupt lets the user talk over the assistant instead of
       // waiting for it to finish — this is what makes it actually listen
       // mid-sentence rather than plowing through the whole question.
@@ -605,14 +613,6 @@ export function VoiceExperience({
     const reviewQuestions = getAllQuestions(form);
     const sensitivity = sensitivityRef.current;
 
-    const bargeInCheck = createSustainedGate(
-      () =>
-        !pausedRef.current &&
-        mic.getLevel(sensitivity.voiceBandMinRatio) >
-          sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
-      sensitivity.bargeInSustainMs
-    );
-
     async function speak(text: string) {
       setOrbState("speaking");
       setAssistantText(text);
@@ -627,6 +627,16 @@ export function VoiceExperience({
         voiceBandMinRatio: sensitivity.voiceBandMinRatio,
         minSpeechMs: sensitivity.minSpeechMs,
       }).catch(() => {});
+      // Built fresh per call — see the matching comment in the
+      // conversation-phase speak() for why reusing one across many
+      // playbacks caused a false near-instant interruption.
+      const bargeInCheck = createSustainedGate(
+        () =>
+          !pausedRef.current &&
+          mic.getLevel(sensitivity.voiceBandMinRatio) >
+            sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
+        sensitivity.bargeInSustainMs
+      );
       await speakText(text, { shouldInterrupt: bargeInCheck }).catch(() => {});
     }
 

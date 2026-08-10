@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // Reads and speaks a form question aloud via ElevenLabs TTS.
-// POST { text: string } -> audio/mpeg bytes
+// POST { text: string, voice?: "female" | "male" } -> audio/mpeg bytes
 
-// ElevenLabs' well-known default premade voice ("Rachel") — used unless
-// ELEVENLABS_VOICE_ID is set. Swap it any time without touching code.
-const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+// ElevenLabs' well-known premade voices — Rachel (female) and Adam (male).
+// ELEVENLABS_VOICE_ID, if set, overrides the female/default pick only —
+// an explicit voice="male" from the client always wins, since that's a
+// deliberate in-app choice.
+const FEMALE_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"; // Rachel
+const MALE_VOICE_ID = "pNInz6obpgDQGcFmaJgB"; // Adam
 
 // Flash is ElevenLabs' lowest-latency model — matters here since this is a
 // live back-and-forth conversation, not a batch narration job.
@@ -25,7 +28,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing 'text'" }, { status: 400 });
   }
 
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
+  const voiceId =
+    body?.voice === "male"
+      ? MALE_VOICE_ID
+      : body?.voice === "female"
+        ? FEMALE_VOICE_ID
+        : process.env.ELEVENLABS_VOICE_ID || FEMALE_VOICE_ID;
 
   try {
     const res = await fetch(

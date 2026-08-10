@@ -8,7 +8,20 @@ export interface Interpretation {
   needs_clarification: boolean;
   clarification_question: string | null;
   off_topic: boolean;
-  off_topic_reply: string | null;
+}
+
+export type VoiceGender = "female" | "male";
+
+const VOICE_GENDER_STORAGE_KEY = "tericvoice:voice-gender";
+
+export function getVoiceGender(): VoiceGender {
+  if (typeof window === "undefined") return "female";
+  return window.localStorage.getItem(VOICE_GENDER_STORAGE_KEY) === "male" ? "male" : "female";
+}
+
+export function setVoiceGender(gender: VoiceGender): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(VOICE_GENDER_STORAGE_KEY, gender);
 }
 
 export interface ReviewCommand {
@@ -90,14 +103,19 @@ async function throwForFailedResponse(res: Response, fallback: string): Promise<
  */
 export async function speakText(
   text: string,
-  opts: { signal?: AbortSignal; shouldInterrupt?: () => boolean; graceMs?: number } = {}
+  opts: {
+    signal?: AbortSignal;
+    shouldInterrupt?: () => boolean;
+    graceMs?: number;
+    voice?: VoiceGender;
+  } = {}
 ): Promise<{ interrupted: boolean }> {
-  const { signal, shouldInterrupt, graceMs = 350 } = opts;
+  const { signal, shouldInterrupt, graceMs = 350, voice } = opts;
 
   const res = await fetch("/api/voice/speak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, voice }),
     signal,
   });
   if (!res.ok) await throwForFailedResponse(res, "Text-to-speech request failed");

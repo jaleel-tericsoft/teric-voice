@@ -35,12 +35,6 @@ const InterpretationSchema = z.object({
     .describe(
       "True if the transcript doesn't attempt to answer the question at all — small talk, a question back to the assistant, an unrelated remark, or silence-filler words. False for any genuine (even if unclear) attempt to answer."
     ),
-  off_topic_reply: z
-    .string()
-    .nullable()
-    .describe(
-      "Only used when off_topic is true: a brief, genuinely helpful spoken answer to whatever the user actually said (answer their question if they asked one, respond naturally to small talk, etc). 1-2 short sentences, no more. Null when off_topic is false."
-    ),
 });
 
 const SYSTEM_PROMPT = `You interpret a spoken answer to a form question for a voice-based data entry app.
@@ -48,7 +42,7 @@ const SYSTEM_PROMPT = `You interpret a spoken answer to a form question for a vo
 Given the question, the expected field type, and a raw speech transcript, extract the structured value the user intended — not the raw transcript. Understand natural variation (e.g. "yeah", "I do", "yes I have one" all mean yes for a yes_no field). If options were given for a single_select field, match spoken words to the closest option even if phrased differently.
 
 Two distinct failure cases — do not conflate them:
-- off_topic: the user didn't attempt to answer at all (small talk, asking the assistant something, an unrelated remark). Never guess a value here. Instead, actually address what they said in off_topic_reply — if they asked a real question, answer it properly and helpfully like a knowledgeable assistant would, don't dodge it or just say to stay focused; if it was small talk, respond naturally. Keep it brief (1-2 sentences) since the app will read it aloud and then return to the form question on its own — you don't need to add any "let's get back to the form" framing yourself.
+- off_topic: the user didn't attempt to answer at all (small talk, asking the assistant something unrelated, an unrelated remark). Never guess a value here — the app redirects them back to the form on its own, you don't need to (and must not) answer whatever they said. Stay strictly on the form; don't speculate or make up information outside it.
 - needs_clarification: the user did attempt to answer, but it's ambiguous or low-confidence. Ask a short yes/no confirmation of your best guess instead of silently accepting it.
 
 A genuine attempt that's merely informal or imprecise (e.g. "umm, Bengaluru I think") is NOT off_topic — interpret it normally, using needs_clarification only if your confidence is genuinely low.
@@ -86,7 +80,6 @@ export async function POST(req: NextRequest) {
       needs_clarification: false,
       clarification_question: null,
       off_topic: false,
-      off_topic_reply: null,
     });
   }
 

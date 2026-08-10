@@ -38,6 +38,9 @@ import {
   interpretReviewCommand,
   getSensitivityConfig,
   createSustainedGate,
+  getVoiceGender,
+  setVoiceGender,
+  type VoiceGender,
 } from "@/lib/voice-client";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
@@ -233,6 +236,7 @@ export function VoiceExperience({
   const [micError, setMicError] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [language, setLanguage] = useState<LanguageCode>("en");
+  const [voiceGender, setVoiceGenderState] = useState<VoiceGender>(() => getVoiceGender());
 
   const pausedRef = useRef(paused);
   useEffect(() => {
@@ -245,6 +249,14 @@ export function VoiceExperience({
   useEffect(() => {
     languageRef.current = language;
   }, [language]);
+
+  // Same idea for the spoken voice — persists across sessions (device-local)
+  // and applies immediately if switched mid-conversation.
+  const voiceGenderRef = useRef(voiceGender);
+  useEffect(() => {
+    voiceGenderRef.current = voiceGender;
+    setVoiceGender(voiceGender);
+  }, [voiceGender]);
 
   // The review-phase loop below runs once and then keeps listening
   // indefinitely — it needs to see each field update as it happens, not the
@@ -354,7 +366,7 @@ export function VoiceExperience({
       // shouldInterrupt lets the user talk over the assistant instead of
       // waiting for it to finish — this is what makes it actually listen
       // mid-sentence rather than plowing through the whole question.
-      return speakText(text, { shouldInterrupt: bargeInCheck });
+      return speakText(text, { shouldInterrupt: bargeInCheck, voice: voiceGenderRef.current });
     }
 
     async function listenAndTranscribe(): Promise<string> {
@@ -512,15 +524,12 @@ export function VoiceExperience({
             }
           }
 
-          // Genuinely off-topic — actually answer what they asked (or
-          // respond to the small talk), then pick the form back up. A bare
-          // "let's stay focused" dodge isn't a real answer and reads as
-          // scripted rather than a natural assistant.
-          const reply = interpretation.off_topic_reply?.trim();
-          overridePrompt = reply
-            ? `${reply} Now, back to the form — ${questionPrompt(q, 0)}`
-            : questionPrompt(q, 0);
-          attempt--; // answering a real question isn't a failed attempt at this one
+          // Genuinely off-topic — redirect back to the form without trying
+          // to answer whatever they said. Guessing at things outside the
+          // form risks speaking made-up/unreliable information, so this
+          // stays a plain, honest redirect rather than a bluffed answer.
+          overridePrompt = `Let's stay focused on the form. ${questionPrompt(q, 0)}`;
+          attempt--; // an off-topic remark isn't a failed attempt at this question
           continue;
         }
 
@@ -644,7 +653,9 @@ export function VoiceExperience({
             sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
         sensitivity.bargeInSustainMs
       );
-      await speakText(text, { shouldInterrupt: bargeInCheck }).catch(() => {});
+      await speakText(text, { shouldInterrupt: bargeInCheck, voice: voiceGenderRef.current }).catch(
+        () => {}
+      );
     }
 
     async function run() {
@@ -948,29 +959,51 @@ export function VoiceExperience({
                   </button>
                 </PopoverTrigger>
                 <PopoverContent align="end" side="top" className="w-64 border-none bg-background">
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">
-                      Spoken language
-                    </span>
-                    <Select
-                      value={language}
-                      onValueChange={(v) => setLanguage(v as LanguageCode)}
-                    >
-                      <SelectTrigger className="h-9 w-full rounded-lg">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {LANGUAGE_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-[11px] text-muted-foreground">
-                      Set to English by default — switch if you'd rather answer in another
-                      language.
-                    </p>
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Spoken language
+                      </span>
+                      <Select
+                        value={language}
+                        onValueChange={(v) => setLanguage(v as LanguageCode)}
+                      >
+                        <SelectTrigger className="h-9 w-full rounded-lg">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LANGUAGE_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">
+                        Set to English by default — switch if you'd rather answer in another
+                        language.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Assistant voice
+                      </span>
+                      <Select
+                        value={voiceGender}
+                        onValueChange={(v) => setVoiceGenderState(v as VoiceGender)}
+                      >
+                        <SelectTrigger className="h-9 w-full rounded-lg">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="female">Female</SelectItem>
+                          <SelectItem value="male">Male</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">
+                        Applies to the next question it asks, and is remembered on this device.
+                      </p>
+                    </div>
                   </div>
                 </PopoverContent>
               </Popover>

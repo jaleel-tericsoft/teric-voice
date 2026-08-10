@@ -36,11 +36,8 @@ import {
   transcribeAudio,
   interpretAnswer,
   interpretReviewCommand,
-  getVoiceSensitivity,
-  setVoiceSensitivity,
   getSensitivityConfig,
   createSustainedGate,
-  type VoiceSensitivity,
 } from "@/lib/voice-client";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
@@ -120,12 +117,6 @@ const LANGUAGE_OPTIONS = [
   { value: "hi", label: "Hindi" },
 ] as const;
 type LanguageCode = (typeof LANGUAGE_OPTIONS)[number]["value"];
-
-const SENSITIVITY_OPTIONS: { value: VoiceSensitivity; label: string; hint: string }[] = [
-  { value: "low", label: "Low", hint: "Best in noisy rooms — needs louder, clearer speech." },
-  { value: "medium", label: "Medium", hint: "Balanced — the default for most spaces." },
-  { value: "high", label: "High", hint: "Best in quiet rooms — picks up soft speech faster." },
-];
 
 function isPaused(pausedRef: { current: boolean }, cancelledRef: { current: boolean }) {
   return new Promise<void>((resolve) => {
@@ -238,7 +229,6 @@ export function VoiceExperience({
   const [micError, setMicError] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [language, setLanguage] = useState<LanguageCode>("en");
-  const [sensitivity, setSensitivity] = useState<VoiceSensitivity>(() => getVoiceSensitivity());
 
   const pausedRef = useRef(paused);
   useEffect(() => {
@@ -286,15 +276,12 @@ export function VoiceExperience({
     };
   }, []);
 
-  // Mirrors `sensitivity` for the listening loops below (which read a ref,
-  // not state, since they run inside a long-lived effect) — updates
-  // instantly if the user changes it mid-session from the control bar, and
-  // persists so it's remembered next time too.
-  const sensitivityRef = useRef(getSensitivityConfig(sensitivity));
-  useEffect(() => {
-    sensitivityRef.current = getSensitivityConfig(sensitivity);
-    setVoiceSensitivity(sensitivity);
-  }, [sensitivity]);
+  // Not user-configurable — fixed to the "low" preset, which is the most
+  // resistant to picking up other people talking nearby: it requires
+  // louder, longer, more clearly voice-shaped speech before treating
+  // anything as "the user is talking", which is what actually stops
+  // background conversations from being mistaken for an answer.
+  const sensitivityRef = useRef(getSensitivityConfig("low"));
 
   useEffect(() => {
     if (!started) return;
@@ -944,55 +931,29 @@ export function VoiceExperience({
                   </button>
                 </PopoverTrigger>
                 <PopoverContent align="end" side="top" className="w-64 border-none bg-background">
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Spoken language
-                      </span>
-                      <Select
-                        value={language}
-                        onValueChange={(v) => setLanguage(v as LanguageCode)}
-                      >
-                        <SelectTrigger className="h-9 w-full rounded-lg">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {LANGUAGE_OPTIONS.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-[11px] text-muted-foreground">
-                        Set to English by default — switch if you'd rather answer in another
-                        language.
-                      </p>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Microphone sensitivity
-                      </span>
-                      <Select
-                        value={sensitivity}
-                        onValueChange={(v) => setSensitivity(v as VoiceSensitivity)}
-                      >
-                        <SelectTrigger className="h-9 w-full rounded-lg">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SENSITIVITY_OPTIONS.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-[11px] text-muted-foreground">
-                        {SENSITIVITY_OPTIONS.find((o) => o.value === sensitivity)?.hint}
-                        {" "}Skipping questions in a noisy room? Try Low.
-                      </p>
-                    </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Spoken language
+                    </span>
+                    <Select
+                      value={language}
+                      onValueChange={(v) => setLanguage(v as LanguageCode)}
+                    >
+                      <SelectTrigger className="h-9 w-full rounded-lg">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {LANGUAGE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">
+                      Set to English by default — switch if you'd rather answer in another
+                      language.
+                    </p>
                   </div>
                 </PopoverContent>
               </Popover>
@@ -1027,18 +988,19 @@ export function VoiceExperience({
               You can edit any field manually, or just say "submit" when ready.
             </p>
             <div className="flex items-center gap-2">
-              {answeredCount > 0 && (
-                <Button
-                  variant="secondary"
-                  disabled={phase === "submitting"}
-                  onClick={handleSaveDraft}
-                  className="rounded-full"
-                  title="Save what's been answered so far and continue later"
-                >
-                  <Save className="size-4" />
-                  Save Draft
-                </Button>
-              )}
+              {/* Always visible (not just once something's answered) so it's
+                  never hard to find — just not usable until there's
+                  something worth saving. */}
+              <Button
+                variant="secondary"
+                disabled={answeredCount === 0 || phase === "submitting"}
+                onClick={handleSaveDraft}
+                className="rounded-full"
+                title="Save what's been answered so far and continue later"
+              >
+                <Save className="size-4" />
+                Save Draft
+              </Button>
               <Button
                 disabled={phase !== "review"}
                 onClick={handleSubmit}

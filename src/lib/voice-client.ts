@@ -52,21 +52,8 @@ const SENSITIVITY_PRESETS: Record<VoiceSensitivity, SensitivityConfig> = {
   high: { speechThreshold: 0.03, voiceBandMinRatio: 0.42, minSpeechMs: 110, bargeInSustainMs: 200 },
 };
 
-const SENSITIVITY_STORAGE_KEY = "tericvoice:mic-sensitivity";
-
 export function getSensitivityConfig(level: VoiceSensitivity): SensitivityConfig {
   return SENSITIVITY_PRESETS[level];
-}
-
-export function getVoiceSensitivity(): VoiceSensitivity {
-  if (typeof window === "undefined") return "medium";
-  const stored = window.localStorage.getItem(SENSITIVITY_STORAGE_KEY);
-  return stored === "low" || stored === "medium" || stored === "high" ? stored : "medium";
-}
-
-export function setVoiceSensitivity(level: VoiceSensitivity): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(SENSITIVITY_STORAGE_KEY, level);
 }
 
 /** Wraps a boolean check so it only reports true once the underlying

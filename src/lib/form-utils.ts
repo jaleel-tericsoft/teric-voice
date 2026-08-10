@@ -1,4 +1,4 @@
-import type { EntryAnswer, FormDefinition, FormQuestion } from "@/types";
+import type { Entry, EntryAnswer, FormDefinition, FormQuestion } from "@/types";
 
 export function getCurrentVersion(form: FormDefinition) {
   return (
@@ -56,6 +56,23 @@ export function formatAnswerValue(
   }
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
+}
+
+/** True once every required, currently-visible question has a real answer.
+ * Drives the "no PDF for a not-fully-filled entry" rule — an in-progress
+ * draft (or one where required fields were skipped) shouldn't be allowed to
+ * generate a document that looks finished when it isn't. */
+export function isEntryComplete(form: FormDefinition, entry: Pick<Entry, "answers">): boolean {
+  const answerMap: Record<string, EntryAnswer["value"]> = {};
+  for (const a of entry.answers) answerMap[a.fieldName] = a.value;
+
+  return getAllQuestions(form).every((q) => {
+    const visible =
+      !q.conditional || answerMap[q.conditional.dependsOnFieldName] === q.conditional.equals;
+    if (!visible || !q.required) return true;
+    const value = answerMap[q.fieldName];
+    return value !== undefined && value !== null && value !== "";
+  });
 }
 
 export function getAnswerValue(

@@ -11,10 +11,11 @@ import {
 } from "@/components/ui/table";
 import { EntryStatusBadge, EmailStatusBadge } from "@/components/entries/status-badge";
 import { PdfAction } from "@/components/entries/pdf-action";
-import { shortLabel, getAnswerValue } from "@/lib/form-utils";
+import { Button } from "@/components/ui/button";
+import { shortLabel, getAnswerValue, isEntryComplete } from "@/lib/form-utils";
 import { formatDate } from "@/lib/format";
 import type { Entry, FormDefinition } from "@/types";
-import { Inbox } from "lucide-react";
+import { Inbox, Mic } from "lucide-react";
 
 export function EntriesTable({
   form,
@@ -74,34 +75,59 @@ export function EntriesTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {entries.map((entry) => (
-            <TableRow
-              key={entry.id}
-              className="cursor-pointer border-border/60"
-              onClick={() => router.push(`/entries/${entry.id}`)}
-            >
-              <TableCell className="pl-4 font-mono text-xs font-medium text-muted-foreground">
-                {entry.id}
-              </TableCell>
-              {form.entryListColumns.map((col) => (
-                <TableCell key={col} className="text-sm text-foreground">
-                  {getAnswerValue(entry.answers, col)}
+          {entries.map((entry) => {
+            const resumable = entry.status === "draft" || entry.status === "in_progress";
+            const complete = isEntryComplete(form, entry);
+            return (
+              <TableRow
+                key={entry.id}
+                className="cursor-pointer border-border/60"
+                onClick={() => router.push(`/entries/${entry.id}`)}
+              >
+                <TableCell className="pl-4 font-mono text-xs font-medium text-muted-foreground">
+                  {entry.id}
                 </TableCell>
-              ))}
-              <TableCell className="text-sm text-muted-foreground">
-                {formatDate(entry.createdAt)}
-              </TableCell>
-              <TableCell>
-                <EmailStatusBadge status={entry.email.status} />
-              </TableCell>
-              <TableCell>
-                <EntryStatusBadge status={entry.status} />
-              </TableCell>
-              <TableCell className="pr-4 text-right">
-                <PdfAction status={entry.pdf.status} entry={entry} form={form} />
-              </TableCell>
-            </TableRow>
-          ))}
+                {form.entryListColumns.map((col) => (
+                  <TableCell key={col} className="text-sm text-foreground">
+                    {getAnswerValue(entry.answers, col)}
+                  </TableCell>
+                ))}
+                <TableCell className="text-sm text-muted-foreground">
+                  {formatDate(entry.createdAt)}
+                </TableCell>
+                <TableCell>
+                  <EmailStatusBadge status={entry.email.status} />
+                </TableCell>
+                <TableCell>
+                  <EntryStatusBadge status={entry.status} />
+                </TableCell>
+                <TableCell className="pr-4 text-right">
+                  {resumable ? (
+                    <Button
+                      size="sm"
+                      className="rounded-full text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/voice/${entry.id}`);
+                      }}
+                    >
+                      <Mic className="size-3.5" />
+                      Resume
+                    </Button>
+                  ) : (
+                    <PdfAction
+                      status={entry.pdf.status}
+                      entry={entry}
+                      form={form}
+                      disabledReason={
+                        complete ? undefined : "Complete all required fields to generate a PDF"
+                      }
+                    />
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </div>

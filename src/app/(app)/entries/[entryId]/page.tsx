@@ -1,5 +1,7 @@
+"use client";
+
+import { use } from "react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import {
   ArrowLeft,
   Mail,
@@ -7,13 +9,17 @@ import {
   Calendar,
   Hash,
   GitBranch,
+  AlertTriangle,
+  Mic,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { EntryStatusBadge, EmailStatusBadge } from "@/components/entries/status-badge";
 import { PdfAction } from "@/components/entries/pdf-action";
 import { ResendEmailButton } from "@/components/entries/resend-email-button";
 import { VoiceSessionPanel } from "@/components/entries/voice-session-panel";
-import { getEntryById, getFormById } from "@/lib/mock-data";
-import { fieldLabel, formatAnswerValue } from "@/lib/form-utils";
+import { useEntriesStore } from "@/lib/entries-store";
+import { useFormsStore } from "@/lib/forms-store";
+import { fieldLabel, formatAnswerValue, isEntryComplete } from "@/lib/form-utils";
 import { formatDateTime } from "@/lib/format";
 import type { AuditEvent } from "@/types";
 
@@ -31,15 +37,35 @@ const auditLabels: Record<AuditEvent["type"], string> = {
   email_resent: "Email Resent",
 };
 
-export default async function EntryDetailPage(
-  props: PageProps<"/entries/[entryId]">
-) {
-  const { entryId } = await props.params;
+export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) {
+  const { entryId } = use(props.params);
+  const { getEntryById } = useEntriesStore();
+  const { forms } = useFormsStore();
   const entry = getEntryById(entryId);
-  if (!entry) notFound();
 
-  const form = getFormById(entry.formId);
+  if (!entry) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 pt-24 text-center">
+        <span className="flex size-14 items-center justify-center rounded-full bg-warning/15 text-warning">
+          <AlertTriangle className="size-6" />
+        </span>
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Entry not found</h1>
+          <p className="text-sm text-muted-foreground">
+            This entry doesn&apos;t exist, or hasn&apos;t finished loading.
+          </p>
+        </div>
+        <Link href="/entries" className="text-sm font-medium text-primary hover:underline">
+          Back to Entries
+        </Link>
+      </div>
+    );
+  }
+
+  const form = forms.find((f) => f.id === entry.formId);
   const version = form?.versions.find((v) => v.version === entry.formVersion);
+  const resumable = entry.status === "draft" || entry.status === "in_progress";
+  const complete = form ? isEntryComplete(form, entry) : false;
 
   return (
     <div className="flex flex-col gap-6 pt-6 pb-4">
@@ -50,7 +76,7 @@ export default async function EntryDetailPage(
         >
           <ArrowLeft className="size-4" />
         </Link>
-        <div>
+        <div className="flex-1">
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-foreground">
               {entry.id}
@@ -59,6 +85,14 @@ export default async function EntryDetailPage(
           </div>
           <p className="text-sm text-muted-foreground">{entry.formName}</p>
         </div>
+        {resumable && (
+          <Button asChild className="rounded-full">
+            <Link href={`/voice/${entry.id}`}>
+              <Mic className="size-4" />
+              Resume
+            </Link>
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
@@ -174,7 +208,13 @@ export default async function EntryDetailPage(
             <h2 className="mb-4 text-[15px] font-semibold text-foreground">
               Document
             </h2>
-            <PdfAction status={entry.pdf.status} entry={entry} form={form} variant="detail" />
+            <PdfAction
+              status={entry.pdf.status}
+              entry={entry}
+              form={form}
+              variant="detail"
+              disabledReason={complete ? undefined : "Complete all required fields to generate a PDF"}
+            />
           </div>
 
           <div className="rounded-2xl border border-border/60 bg-card p-5">

@@ -12,8 +12,9 @@ import {
 } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { EntryStatusBadge } from "@/components/entries/status-badge";
-import { dashboardStats, entries, currentUser } from "@/lib/mock-data";
+import { currentUser } from "@/lib/mock-data";
 import { useFormsStore } from "@/lib/forms-store";
+import { useEntriesStore } from "@/lib/entries-store";
 import { timeAgo } from "@/lib/format";
 
 function initials(name: string) {
@@ -22,6 +23,7 @@ function initials(name: string) {
 
 export default function DashboardPage() {
   const { forms } = useFormsStore();
+  const { entries, stats: dashboardStats } = useEntriesStore();
   const recent = [...entries]
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
     .slice(0, 5);
@@ -42,7 +44,7 @@ export default function DashboardPage() {
             questions, listens, and fills the form as you speak.
           </p>
           <Link
-            href="/voice/new?form=employee-information"
+            href="/voice/new?form=vehicle-service-upsell"
             className="flex w-fit items-center gap-2 rounded-full bg-teal px-5 py-2.5 text-sm font-semibold text-teal-foreground transition-transform hover:bg-[#256b76] active:scale-[0.98]"
           >
             <Mic className="size-4" strokeWidth={2.5} />
@@ -103,45 +105,37 @@ export default function DashboardPage() {
             </Link>
           </div>
           <div className="flex flex-col">
-            {recent.map((entry) => (
-              <Link
-                key={entry.id}
-                href={`/entries/${entry.id}`}
-                className="flex items-center justify-between gap-4 rounded-xl px-2 py-3 transition-colors hover:bg-muted"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-xs font-semibold text-foreground">
-                    {initials(
-                      String(
-                        entry.answers.find((a) => a.fieldName === "full_name")
-                          ?.value ?? entry.id
-                      )
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {entry.answers.find((a) => a.fieldName === "full_name")
-                        ?.value
-                        ? String(
-                            entry.answers.find(
-                              (a) => a.fieldName === "full_name"
-                            )?.value
-                          )
-                        : entry.id}
+            {recent.map((entry) => {
+              const plate = entry.answers.find((a) => a.fieldName === "number_plate")?.value;
+              const label = plate ? String(plate) : entry.id;
+              return (
+                <Link
+                  key={entry.id}
+                  href={`/entries/${entry.id}`}
+                  className="flex items-center justify-between gap-4 rounded-xl px-2 py-3 transition-colors hover:bg-muted"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-xs font-semibold text-foreground">
+                      {initials(label)}
                     </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {entry.formName} · {entry.id}
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {label}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {entry.formName} · {entry.id}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  <span className="hidden text-xs text-muted-foreground sm:inline">
-                    {timeAgo(entry.createdAt)}
-                  </span>
-                  <EntryStatusBadge status={entry.status} />
-                </div>
-              </Link>
-            ))}
+                  <div className="flex shrink-0 items-center gap-3">
+                    <span className="hidden text-xs text-muted-foreground sm:inline">
+                      {timeAgo(entry.createdAt)}
+                    </span>
+                    <EntryStatusBadge status={entry.status} />
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         </div>
 

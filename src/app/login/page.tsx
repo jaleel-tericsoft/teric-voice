@@ -75,7 +75,7 @@ export default function LoginPage() {
                 id="email"
                 type="email"
                 placeholder="you@company.com"
-                defaultValue="priya@northwind.example"
+                defaultValue="priya@northwindmotors.example"
                 className="h-11 rounded-xl"
               />
             </div>

@@ -7,7 +7,7 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EntriesTable } from "@/components/entries/entries-table";
 import { useFormsStore } from "@/lib/forms-store";
-import { getEntriesForForm } from "@/lib/mock-data";
+import { useEntriesStore } from "@/lib/entries-store";
 import { cn } from "@/lib/utils";
 
 export default function EntriesPage() {
@@ -20,6 +20,7 @@ export default function EntriesPage() {
 
 function EntriesPageContent() {
   const { forms } = useFormsStore();
+  const { getEntriesForForm } = useEntriesStore();
   const searchParams = useSearchParams();
   const formParam = searchParams.get("form");
   const activeForm = forms.find((f) => f.formId === formParam) ?? forms[0];

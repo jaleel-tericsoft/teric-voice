@@ -63,7 +63,7 @@ export function Sidebar() {
 
       <div className="mt-auto pt-6">
         <Link
-          href="/voice/new?form=employee-information"
+          href="/voice/new?form=vehicle-service-upsell"
           className="flex items-center justify-center gap-2 rounded-full bg-teal px-4 py-3 text-[14px] font-semibold text-teal-foreground transition-transform hover:bg-[#18464d] active:scale-[0.98]"
         >
           <Mic className="size-4" strokeWidth={2.5} />

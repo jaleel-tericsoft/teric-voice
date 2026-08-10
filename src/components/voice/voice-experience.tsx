@@ -11,6 +11,7 @@ import {
   CheckCheck,
   AlertTriangle,
   Play,
+  Save,
 } from "lucide-react";
 import { VoiceOrb, type OrbState } from "@/components/voice/voice-orb";
 import { LiveFormPanel, type AnswerMap } from "@/components/voice/live-form-panel";
@@ -41,13 +42,74 @@ import {
   createSustainedGate,
   type VoiceSensitivity,
 } from "@/lib/voice-client";
+import { useEntriesStore } from "@/lib/entries-store";
+import { currentUser } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
-import type { FormDefinition, FormQuestion } from "@/types";
+import type { Entry, EntryAnswer, FormDefinition, FormQuestion } from "@/types";
 
 const MAX_RETRIES = 2; // repeat the question up to this many times if unanswered
 const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
 const SUBMIT_INTENT_RE =
   /\b(submit|confirm(?:ed)?|that'?s (?:correct|right|it|all)|go ahead|looks good|yes,? submit)\b/i;
+// Deliberately anchored to the whole (trimmed) utterance — "skip" needs to
+// be the entire answer, not just a word that happens to appear inside a
+// real one (e.g. an answer that legitimately contains "pass" or "next").
+const SKIP_INTENT_RE =
+  /^(skip(?: (?:it|this|that|question))?|next question|n\/a|not applicable)[.!]?$/i;
+
+let entryIdCounter = 0;
+function generateEntryId(): string {
+  entryIdCounter += 1;
+  return `ENT-${Date.now().toString(36).toUpperCase()}${entryIdCounter}`;
+}
+
+/** Converts the live in-memory answer map into the persisted Entry shape —
+ * shared between "Save Draft & Exit" and the final submit, the only
+ * difference being the status/timestamps passed in. */
+function buildEntry(params: {
+  id: string;
+  form: FormDefinition;
+  answers: AnswerMap;
+  status: Entry["status"];
+  createdAt: string;
+  previous?: Entry;
+}): Entry {
+  const { id, form, answers, status, createdAt, previous } = params;
+  const now = new Date().toISOString();
+  const entryAnswers: EntryAnswer[] = Object.entries(answers)
+    .filter(([, value]) => value !== undefined && value !== "")
+    .map(([fieldName, value]) => {
+      const prior = previous?.answers.find((a) => a.fieldName === fieldName);
+      return (
+        prior && prior.value === value
+          ? prior // keep original provenance/confidence if unchanged
+          : { fieldName, value: value as string | boolean, source: "voice", manuallyCorrected: false, timestamp: now }
+      );
+    });
+
+  return {
+    id,
+    formId: form.id,
+    formName: form.name,
+    formVersion: form.currentVersion,
+    status,
+    createdBy: currentUser.name,
+    createdAt,
+    submittedAt: status === "submitted" ? now : previous?.submittedAt,
+    answers: entryAnswers,
+    pdf: previous?.pdf ?? { status: "not_generated" },
+    email: previous?.email ?? { status: "not_sent", recipient: "" },
+    voiceSession: previous?.voiceSession,
+    audit: [
+      ...(previous?.audit ?? [
+        { id: "a1", type: "session_started" as const, message: "Voice session started", timestamp: createdAt, actor: currentUser.name },
+      ]),
+      status === "submitted"
+        ? { id: `a_${Date.now()}`, type: "entry_created" as const, message: "Entry submitted", timestamp: now, actor: currentUser.name }
+        : { id: `a_${Date.now()}`, type: "field_manually_edited" as const, message: "Saved as draft", timestamp: now, actor: currentUser.name },
+    ],
+  };
+}
 
 // Require slightly louder speech to interrupt the assistant than to simply
 // be picked up while listening — avoids stray noise cutting it off.
@@ -132,8 +194,24 @@ function unlockAudioPlayback() {
   }
 }
 
-export function VoiceExperience({ form }: { form: FormDefinition }) {
+export function VoiceExperience({
+  form,
+  resumeEntry,
+}: {
+  form: FormDefinition;
+  /** When set, this is a previously saved draft/in-progress entry being
+   * continued rather than a fresh one — its answers pre-fill the form and
+   * the conversation skips straight to the first question still unanswered. */
+  resumeEntry?: Entry;
+}) {
   const router = useRouter();
+  const { upsertEntry } = useEntriesStore();
+  // Stable across the whole session (including any number of draft saves)
+  // so re-saving or finally submitting always updates the same entry
+  // instead of creating duplicates.
+  const entryIdRef = useRef(resumeEntry?.id ?? generateEntryId());
+  const createdAtRef = useRef(resumeEntry?.createdAt ?? new Date().toISOString());
+
   const [started, setStarted] = useState(false);
   const [phase, setPhase] = useState<"conversation" | "review" | "submitting">(
     "conversation"
@@ -148,7 +226,14 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
   // field and shouldn't permanently steal the highlight from where the
   // conversation actually is.
   const [highlightField, setHighlightField] = useState<string | null>(null);
-  const [answers, setAnswers] = useState<AnswerMap>({});
+  const [answers, setAnswers] = useState<AnswerMap>(() => {
+    if (!resumeEntry) return {};
+    const map: AnswerMap = {};
+    for (const a of resumeEntry.answers) {
+      if (typeof a.value === "string" || typeof a.value === "boolean") map[a.fieldName] = a.value;
+    }
+    return map;
+  });
   const [paused, setPaused] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -223,14 +308,18 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     // earlier fields) and run() (writes it as each question gets answered).
     // A ref rather than a `let` because askQuestion is defined before run()
     // but needs to see answers as they land, not a stale empty snapshot.
-    const localRef: { current: AnswerMap } = { current: {} };
+    // Seeded from `answers` so a resumed draft starts with what was already
+    // captured last time, instead of asking everything all over again.
+    const localRef: { current: AnswerMap } = { current: { ...answers } };
 
     // Every field the user has already been asked about, whether they
     // answered it, skipped it (ran out of retries), or it's the one being
     // asked right now — this is what makes a field a valid target for
     // "repeat that" / "change my answer to..." mid-conversation. Fields not
     // reached yet aren't referenceable (nothing to repeat or correct).
-    const visitedFieldNamesRef: { current: Set<string> } = { current: new Set() };
+    const visitedFieldNamesRef: { current: Set<string> } = {
+      current: new Set(Object.keys(answers)),
+    };
 
     // Debounced: the raw level check must stay true continuously for
     // bargeInSustainMs before this reports true, so a single stray noise
@@ -305,6 +394,18 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         if (!transcript.trim()) continue; // genuine silence — repeat the question
 
         setUserText(transcript);
+
+        if (SKIP_INTENT_RE.test(transcript.trim())) {
+          if (!q.required) {
+            await speak("No problem, skipping that one.");
+            return null; // leave unanswered, same as any other gap
+          }
+          // Required fields can't be skipped by voice — ask normally again
+          // rather than silently failing or arguing with the user.
+          overridePrompt = `That one's required, so I'll need an answer for it. ${questionPrompt(q, 0)}`;
+          attempt--; // asking to skip isn't a failed attempt at answering
+          continue;
+        }
 
         const interpretation = await interpretAnswer({
           question: q.questionText,
@@ -458,6 +559,15 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
             q.conditional &&
             localRef.current[q.conditional.dependsOnFieldName] !== q.conditional.equals
           ) {
+            continue;
+          }
+          // Already answered — either earlier this session, or carried over
+          // from a resumed draft. Don't ask it again; this is what makes
+          // "continue where I left off" actually skip straight to the first
+          // genuinely unanswered field instead of starting over.
+          const existing = localRef.current[q.fieldName];
+          if (existing !== undefined && existing !== "") {
+            visitedFieldNamesRef.current.add(q.fieldName);
             continue;
           }
 
@@ -654,14 +764,35 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     setAnswers((prev) => ({ ...prev, [fieldName]: value }));
   }
 
+  /** Persists whatever's been answered so far as an in-progress entry and
+   * exits — the entry shows up in Entries with a "Resume" action that
+   * reopens this exact session and picks up on the first unanswered field. */
+  function handleSaveDraft() {
+    const entry = buildEntry({
+      id: entryIdRef.current,
+      form,
+      answers,
+      status: "in_progress",
+      createdAt: createdAtRef.current,
+      previous: resumeEntry,
+    });
+    upsertEntry(entry);
+    router.push("/entries");
+  }
+
   async function handleSubmit() {
     setPhase("submitting");
+    const entry = buildEntry({
+      id: entryIdRef.current,
+      form,
+      answers,
+      status: "submitted",
+      createdAt: createdAtRef.current,
+      previous: resumeEntry,
+    });
+    upsertEntry(entry);
     await new Promise((r) => setTimeout(r, 1300));
-    if (form.formId === "employee-information") {
-      router.push("/entries/ENT-003");
-    } else {
-      router.push("/entries");
-    }
+    router.push(`/entries/${entry.id}`);
   }
 
   const error = micError ?? apiError;
@@ -788,10 +919,22 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
               <button
                 onClick={() => router.push("/entries")}
                 className="flex size-11 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
-                aria-label="End session"
+                aria-label="End session without saving"
+                title="Exit without saving"
               >
                 <X className="size-[18px]" />
               </button>
+              {answeredCount > 0 && (
+                <button
+                  onClick={handleSaveDraft}
+                  className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-white/20"
+                  aria-label="Save as draft and exit"
+                  title="Save what's been answered so far and continue later"
+                >
+                  <Save className="size-[15px]" />
+                  Save Draft
+                </button>
+              )}
               <button
                 onClick={() => setPaused((p) => !p)}
                 className={cn(

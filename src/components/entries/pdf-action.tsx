@@ -10,11 +10,16 @@ export function PdfAction({
   entry,
   form,
   variant = "compact",
+  disabledReason,
 }: {
   status: PdfStatus;
   entry: Entry;
   form: FormDefinition | undefined;
   variant?: "compact" | "detail";
+  /** When set, blocks generating a PDF for the first time (an already
+   * generated one can still be viewed/downloaded/regenerated) — e.g. "not
+   * all required fields are filled in yet". Pass undefined to allow. */
+  disabledReason?: string;
 }) {
   const pdfState = useEntryPdf(entry, form, status);
 
@@ -127,6 +132,21 @@ export function PdfAction({
           <RefreshCw className="size-3.5" />
         </Button>
       </div>
+    );
+  }
+
+  if (disabledReason) {
+    return (
+      <Button
+        size="sm"
+        variant="secondary"
+        disabled
+        title={disabledReason}
+        className="rounded-full text-xs"
+      >
+        <FileText className="size-3.5" />
+        Generate PDF
+      </Button>
     );
   }
 

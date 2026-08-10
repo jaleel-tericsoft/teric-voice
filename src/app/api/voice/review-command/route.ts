@@ -13,15 +13,15 @@ import { zodResponseFormat } from "openai/helpers/zod";
 
 const ReviewCommandSchema = z.object({
   intent: z
-    .enum(["submit", "update_field", "unclear"])
+    .enum(["submit", "update_field", "repeat_field", "unclear"])
     .describe(
-      "submit: user confirmed submission. update_field: user wants to change a specific field's value. unclear: neither — small talk, silence-filler, or a request that isn't about a listed field."
+      "submit: user confirmed submission. update_field: user wants to change a specific field's value. repeat_field: user wants to hear a specific field's question (and its options, if any) again — they didn't give a new value. unclear: neither — small talk, silence-filler, or a request that isn't about a listed field."
     ),
   field_name: z
     .string()
     .nullable()
     .describe(
-      "The fieldName (from the provided list, exact match) the user wants to change. Null unless intent is update_field."
+      "The fieldName (from the provided list, exact match) the user is referring to. Required for update_field and repeat_field, null for submit/unclear."
     ),
   value: z
     .union([z.string(), z.boolean()])
@@ -32,16 +32,17 @@ const ReviewCommandSchema = z.object({
   spoken_reply: z
     .string()
     .describe(
-      "One short, natural sentence to say back to the user: confirm the change if update_field (e.g. \"Updated your phone number to 9876543210.\"), a brief acknowledgement if submit, or a short nudge on what they can say if unclear (e.g. \"You can say something like 'change my email to...', or say submit when you're ready.\")."
+      "One short, natural sentence to say back to the user: confirm the change if update_field (e.g. \"Updated your phone number to 9876543210.\"), a brief acknowledgement if submit, or a short nudge on what they can say if unclear (e.g. \"You can say something like 'change my email to...', or say submit when you're ready.\"). For repeat_field this is ignored (the caller re-reads the question itself using the authoritative option list) — write something reasonable anyway."
     ),
 });
 
-const SYSTEM_PROMPT = `You control a voice-driven review screen for a filled-out form. The user has already answered every question and is now looking at a summary. They can:
+const SYSTEM_PROMPT = `You control a voice-driven review screen for a filled-out form. The user has already answered every question (or, mid-conversation, is still answering them) and is now looking at a summary. They can:
 1. Confirm submission — "submit", "confirm", "that's correct", "go ahead", "looks good", "yes submit".
 2. Ask to change a specific field — "change my phone number to...", "actually my name is...", "make the email ...", "no wait, my city is...".
-3. Say something else — small talk, a question, silence-filler, or a request that doesn't match a listed field.
+3. Ask to hear a field's question again, or its options again — "can you repeat that", "what were the options for employment status", "say the driver question again", "what were my choices". This is repeat_field, NOT update_field — they haven't given a new value, they want to hear it again.
+4. Say something else — small talk, a question, silence-filler, or a request that isn't about a listed field.
 
-You're given the list of fields (fieldName, label, type, options if any, current value) and the transcript. Decide the intent. For update_field, pick the field whose label most plausibly matches what they're talking about, and extract the new value in the correct format for its type. Always write a short, natural spoken_reply — the user should always hear something back, never silence.`;
+You're given the list of fields (fieldName, label, type, options if any, current value) and the transcript. Decide the intent. For update_field, pick the field whose label most plausibly matches what they're talking about, and extract the new value in the correct format for its type. For repeat_field, pick the field they're asking about — if they just say "repeat that" with no field named, pick the field whose current value is missing/empty if there's exactly one such field, otherwise pick the most recently listed one. Always write a short, natural spoken_reply — the user should always hear something back, never silence.`;
 
 export async function POST(req: NextRequest) {
   if (!process.env.OPENAI_API_KEY) {

@@ -204,6 +204,13 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
     // but needs to see answers as they land, not a stale empty snapshot.
     const localRef: { current: AnswerMap } = { current: {} };
 
+    // Every field the user has already been asked about, whether they
+    // answered it, skipped it (ran out of retries), or it's the one being
+    // asked right now — this is what makes a field a valid target for
+    // "repeat that" / "change my answer to..." mid-conversation. Fields not
+    // reached yet aren't referenceable (nothing to repeat or correct).
+    const visitedFieldNamesRef: { current: Set<string> } = { current: new Set() };
+
     // Debounced: the raw level check must stay true continuously for
     // bargeInSustainMs before this reports true, so a single stray noise
     // frame while the assistant is talking doesn't cut it off.
@@ -274,14 +281,16 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         if (interpretation.off_topic) {
           // Doesn't answer the current question — but before assuming the
           // user has wandered off-topic, check whether they're actually
-          // asking to correct something already answered ("actually, change
-          // my email to..."). If so, apply it immediately and pick back up
-          // on the current question, instead of redirecting them to repeat
-          // it later at the review screen.
-          const answeredFieldNames = Object.keys(localRef.current);
-          if (answeredFieldNames.length > 0) {
-            const correctionFields = allQuestions
-              .filter((aq) => answeredFieldNames.includes(aq.fieldName))
+          // referring to a question already visited (this one, an earlier
+          // one they answered, or an earlier one that got skipped): either
+          // correcting its value ("actually, change my email to...") or
+          // asking to hear it again ("what were the options for employment
+          // status again?"). Either way, handle it and pick back up on the
+          // current question — don't make them wait for the review screen.
+          const visitedFieldNames = visitedFieldNamesRef.current;
+          if (visitedFieldNames.size > 0) {
+            const referenceFields = allQuestions
+              .filter((aq) => visitedFieldNames.has(aq.fieldName))
               .map((aq) => ({
                 fieldName: aq.fieldName,
                 label: aq.questionText,
@@ -289,13 +298,14 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
                 options: aq.options?.map((o) => o.value),
                 currentValue: localRef.current[aq.fieldName],
               }));
-            const command = await interpretReviewCommand({ transcript, fields: correctionFields }).catch(
+            const command = await interpretReviewCommand({ transcript, fields: referenceFields }).catch(
               () => null
             );
+
             if (
               command?.intent === "update_field" &&
               command.field_name &&
-              answeredFieldNames.includes(command.field_name)
+              visitedFieldNames.has(command.field_name)
             ) {
               const fieldName = command.field_name;
               localRef.current = { ...localRef.current, [fieldName]: command.value ?? "" };
@@ -306,6 +316,56 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
               overridePrompt = `${command.spoken_reply || "Got it, updated."} Let's continue — ${questionPrompt(q, 0)}`;
               attempt--; // a correction isn't a failed attempt at this question — don't burn a retry on it
               continue;
+            }
+
+            if (
+              command?.intent === "repeat_field" &&
+              command.field_name &&
+              visitedFieldNames.has(command.field_name)
+            ) {
+              const target = allQuestions.find((aq) => aq.fieldName === command.field_name);
+              if (target && target.fieldName === q.fieldName) {
+                // Repeating the very question in progress — just re-ask it,
+                // including its options, and keep listening for its answer.
+                overridePrompt = questionPrompt(q, 0);
+                attempt--;
+                continue;
+              }
+              if (target) {
+                // A different, already-visited question (answered or
+                // skipped) — read it back with its real options (not
+                // whatever the model might recall) and give the user a
+                // chance to answer it right now, then resume where we left
+                // off.
+                await speak(`Sure — ${questionPrompt(target, 0)}`);
+                if (cancelledRef.current) return null;
+                const targetTranscript = await listenAndTranscribe();
+                if (cancelledRef.current) return null;
+
+                if (targetTranscript.trim()) {
+                  const targetInterpretation = await interpretAnswer({
+                    question: target.questionText,
+                    fieldType: target.fieldType,
+                    options: target.options?.map((o) => o.value),
+                    transcript: targetTranscript,
+                  }).catch(() => null);
+                  if (
+                    targetInterpretation &&
+                    !targetInterpretation.off_topic &&
+                    !targetInterpretation.needs_clarification
+                  ) {
+                    localRef.current = {
+                      ...localRef.current,
+                      [target.fieldName]: targetInterpretation.value,
+                    };
+                    setAnswers((prev) => ({ ...prev, [target.fieldName]: targetInterpretation.value }));
+                  }
+                }
+
+                overridePrompt = `Let's continue — ${questionPrompt(q, 0)}`;
+                attempt--;
+                continue;
+              }
             }
           }
 
@@ -362,6 +422,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
           }
 
           setActiveField(q.fieldName);
+          visitedFieldNamesRef.current.add(q.fieldName); // referenceable for "repeat"/"change" from here on, even if it ends up skipped
           const value = await askQuestion(q);
           if (cancelledRef.current) break;
 
@@ -489,6 +550,18 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
           reviewQuestions.some((q) => q.fieldName === command.field_name)
         ) {
           setAnswers((prev) => ({ ...prev, [command.field_name as string]: command.value ?? "" }));
+        }
+
+        if (command.intent === "repeat_field" && command.field_name) {
+          // Re-read the question with its real options, whether it was
+          // answered or skipped — don't trust the model to restate options
+          // from memory when we have the authoritative list right here.
+          const target = reviewQuestions.find((q) => q.fieldName === command.field_name);
+          if (target) {
+            await speak(questionPrompt(target, 0));
+            if (cancelledRef.current) return;
+            continue;
+          }
         }
 
         // update_field confirmation or unclear guidance — either way, respond.

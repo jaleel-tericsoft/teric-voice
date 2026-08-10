@@ -12,7 +12,7 @@ export interface Interpretation {
 }
 
 export interface ReviewCommand {
-  intent: "submit" | "update_field" | "unclear";
+  intent: "submit" | "update_field" | "repeat_field" | "unclear";
   field_name: string | null;
   value: string | boolean | null;
   spoken_reply: string;

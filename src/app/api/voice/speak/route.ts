@@ -40,7 +40,16 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           text,
           model_id: MODEL_ID,
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+          // Tuned for a more natural, conversational delivery rather than a
+          // flat/robotic read: stability slightly below default lets some
+          // natural pitch/pace variation through, a touch of style adds
+          // expressiveness, and speaker boost improves clarity/fidelity.
+          voice_settings: {
+            stability: 0.42,
+            similarity_boost: 0.8,
+            style: 0.3,
+            use_speaker_boost: true,
+          },
         }),
       }
     );

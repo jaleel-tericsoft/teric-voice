@@ -142,6 +142,12 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
   const [assistantText, setAssistantText] = useState("");
   const [userText, setUserText] = useState("");
   const [activeField, setActiveField] = useState<string | null>(null);
+  // Briefly flashes a field in the form preview when a correction lands on
+  // it — separate from `activeField` (the question currently being asked)
+  // since a correction can target a totally different, already-visited
+  // field and shouldn't permanently steal the highlight from where the
+  // conversation actually is.
+  const [highlightField, setHighlightField] = useState<string | null>(null);
   const [answers, setAnswers] = useState<AnswerMap>({});
   const [paused, setPaused] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
@@ -168,6 +174,21 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
   useEffect(() => {
     answersRef.current = answers;
   }, [answers]);
+
+  // Clears a highlightField flash after a couple seconds — tracked so a
+  // second correction landing before the first flash finishes resets the
+  // timer instead of the two racing to clear each other early.
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function flashHighlight(fieldName: string) {
+    setHighlightField(fieldName);
+    if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+    highlightTimeoutRef.current = setTimeout(() => setHighlightField(null), 2200);
+  }
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+    };
+  }, []);
 
   // One mic permission grant, shared across the question loop AND the
   // review-phase "say submit" listener — kept alive between the two instead
@@ -228,6 +249,17 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       setUserText("");
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return { interrupted: false };
+      // Start capturing the mic now, before playback even begins — if the
+      // user starts answering while the assistant is still mid-sentence
+      // (very natural, people don't wait for a hard stop), those words land
+      // in the same recording instead of being lost in the gap between
+      // "assistant stops" and "we start listening", which used to force
+      // people to repeat themselves.
+      mic.startCapture({
+        speechThreshold: sensitivity.speechThreshold,
+        voiceBandMinRatio: sensitivity.voiceBandMinRatio,
+        minSpeechMs: sensitivity.minSpeechMs,
+      }).catch(() => {});
       // shouldInterrupt lets the user talk over the assistant instead of
       // waiting for it to finish — this is what makes it actually listen
       // mid-sentence rather than plowing through the whole question.
@@ -238,7 +270,10 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       setOrbState("listening");
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return "";
-      const clip = await mic.recordUntilSilence({
+      // Continues the capture speak() already started (or starts one fresh,
+      // if this is reached some other way) — doesn't discard whatever was
+      // already recorded while the assistant was still talking.
+      const clip = await mic.waitForCapture({
         speechThreshold: sensitivity.speechThreshold,
         voiceBandMinRatio: sensitivity.voiceBandMinRatio,
         minSpeechMs: sensitivity.minSpeechMs,
@@ -310,6 +345,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
               const fieldName = command.field_name;
               localRef.current = { ...localRef.current, [fieldName]: command.value ?? "" };
               setAnswers((prev) => ({ ...prev, [fieldName]: command.value ?? "" }));
+              flashHighlight(fieldName); // show exactly which field just changed
               // One natural line — confirm the change, then pick the
               // current question back up — rather than a robotic "sorry I
               // didn't catch that" retry.
@@ -336,7 +372,9 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
                 // skipped) — read it back with its real options (not
                 // whatever the model might recall) and give the user a
                 // chance to answer it right now, then resume where we left
-                // off.
+                // off. Move the highlight over to it while it's actually
+                // being asked, since it's no longer the current question.
+                setActiveField(target.fieldName);
                 await speak(`Sure — ${questionPrompt(target, 0)}`);
                 if (cancelledRef.current) return null;
                 const targetTranscript = await listenAndTranscribe();
@@ -359,9 +397,11 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
                       [target.fieldName]: targetInterpretation.value,
                     };
                     setAnswers((prev) => ({ ...prev, [target.fieldName]: targetInterpretation.value }));
+                    flashHighlight(target.fieldName);
                   }
                 }
 
+                setActiveField(q.fieldName); // back to the question actually in progress
                 overridePrompt = `Let's continue — ${questionPrompt(q, 0)}`;
                 attempt--;
                 continue;
@@ -482,6 +522,14 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
       setUserText("");
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return;
+      // Same overlap trick as the conversation phase — start capturing
+      // before playback begins so an early "actually, change..." doesn't
+      // lose its first words.
+      mic.startCapture({
+        speechThreshold: sensitivity.speechThreshold,
+        voiceBandMinRatio: sensitivity.voiceBandMinRatio,
+        minSpeechMs: sensitivity.minSpeechMs,
+      }).catch(() => {});
       await speakText(text, { shouldInterrupt: bargeInCheck }).catch(() => {});
     }
 
@@ -501,7 +549,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
         await isPaused(pausedRef, cancelledRef);
         if (cancelledRef.current) return;
 
-        const clip = await mic.recordUntilSilence({
+        const clip = await mic.waitForCapture({
           speechThreshold: sensitivity.speechThreshold,
           voiceBandMinRatio: sensitivity.voiceBandMinRatio,
           minSpeechMs: sensitivity.minSpeechMs,
@@ -550,6 +598,7 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
           reviewQuestions.some((q) => q.fieldName === command.field_name)
         ) {
           setAnswers((prev) => ({ ...prev, [command.field_name as string]: command.value ?? "" }));
+          flashHighlight(command.field_name); // show exactly which field just changed
         }
 
         if (command.intent === "repeat_field" && command.field_name) {
@@ -835,7 +884,8 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
             <LiveFormPanel
               form={form}
               answers={answers}
-              activeFieldName={phase === "conversation" ? activeField : null}
+              activeFieldName={highlightField ?? (phase === "conversation" ? activeField : null)}
+              activeLabel={highlightField ? "updated" : "listening"}
               onFieldChange={handleManualChange}
             />
           </div>

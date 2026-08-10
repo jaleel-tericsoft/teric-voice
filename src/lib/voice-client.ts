@@ -225,10 +225,54 @@ export async function interpretReviewCommand(params: {
  * whatever was captured (transcribe() will report that as empty — the
  * caller's cue to repeat the question).
  */
+interface CaptureOpts {
+  maxDurationMs?: number;
+  silenceMs?: number;
+  speechThreshold?: number;
+  voiceBandMinRatio?: number;
+  minSpeechMs?: number;
+}
+
+interface ResolvedCaptureOpts {
+  maxDurationMs: number;
+  silenceMs: number;
+  speechThreshold: number;
+  voiceBandMinRatio: number;
+  minSpeechMs: number;
+}
+
 export class MicSession {
   private stream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
+
+  private recorder: MediaRecorder | null = null;
+  private chunks: Blob[] = [];
+  private mimeType = "audio/webm";
+  private rafId = 0;
+  private captureOpts: ResolvedCaptureOpts = MicSession.resolveCaptureOpts({});
+
+  // Tracked continuously for as long as a capture is running — including
+  // while the assistant is still talking, since capture now starts at the
+  // same moment the assistant begins speaking (see startCapture).
+  private hasSpoken = false;
+  private aboveThresholdSince: number | null = null;
+  private silenceStartedAt: number | null = null;
+  private capturedAt = 0;
+
+  private static resolveCaptureOpts(opts: CaptureOpts): ResolvedCaptureOpts {
+    const defaults = SENSITIVITY_PRESETS.medium;
+    return {
+      // Generous: this clock now starts when capture begins, which is as
+      // early as the assistant's speech itself — it has to comfortably
+      // outlast a long TTS question, not just the user's answer.
+      maxDurationMs: opts.maxDurationMs ?? 20000,
+      silenceMs: opts.silenceMs ?? 900, // shorter wait after the user stops = faster turnaround
+      speechThreshold: opts.speechThreshold ?? defaults.speechThreshold,
+      voiceBandMinRatio: opts.voiceBandMinRatio ?? defaults.voiceBandMinRatio,
+      minSpeechMs: opts.minSpeechMs ?? defaults.minSpeechMs,
+    };
+  }
 
   async init(): Promise<void> {
     if (this.stream) return;
@@ -250,6 +294,9 @@ export class MicSession {
   }
 
   stop(): void {
+    if (this.rafId) cancelAnimationFrame(this.rafId);
+    if (this.recorder && this.recorder.state === "recording") this.recorder.stop();
+    this.recorder = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.audioContext?.close().catch(() => {});
     this.stream = null;
@@ -289,79 +336,115 @@ export class MicSession {
     return Math.min(1, overallLevel * 2.5);
   }
 
-  async recordUntilSilence(opts: {
-    maxDurationMs?: number;
-    silenceMs?: number;
-    speechThreshold?: number;
-    voiceBandMinRatio?: number;
-    minSpeechMs?: number;
-  } = {}): Promise<Blob> {
-    const defaults = SENSITIVITY_PRESETS.medium;
-    const {
-      maxDurationMs = 12000,
-      silenceMs = 900, // shorter wait after the user stops = faster turnaround
-      speechThreshold = defaults.speechThreshold,
-      voiceBandMinRatio = defaults.voiceBandMinRatio,
-      minSpeechMs = defaults.minSpeechMs,
-    } = opts;
+  /**
+   * Starts recording immediately and begins tracking speech/silence from
+   * this instant — call this as early as possible, ideally the moment the
+   * assistant starts speaking (not after it finishes). That way, if the
+   * user starts answering mid-sentence — very common in natural
+   * conversation — those first words are already inside the recording
+   * instead of being lost in the gap between "assistant stops talking" and
+   * "we start listening" that used to clip them, forcing a repeat.
+   *
+   * Safe to call repeatedly: a capture already in progress is left alone.
+   */
+  async startCapture(opts: CaptureOpts = {}): Promise<void> {
+    if (this.recorder && this.recorder.state === "recording") return;
     if (!this.stream) await this.init();
 
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    this.captureOpts = MicSession.resolveCaptureOpts(opts);
+    this.mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
       : "audio/webm";
-    const recorder = new MediaRecorder(this.stream!, { mimeType });
+
+    const recorder = new MediaRecorder(this.stream!, { mimeType: this.mimeType });
     const chunks: Blob[] = [];
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
     };
+    this.recorder = recorder;
+    this.chunks = chunks;
+    this.hasSpoken = false;
+    this.aboveThresholdSince = null;
+    this.silenceStartedAt = null;
+    this.capturedAt = Date.now();
 
-    return new Promise<Blob>((resolve) => {
+    recorder.start(100);
+    this.rafId = requestAnimationFrame(this.tick);
+  }
+
+  private tick = () => {
+    if (!this.recorder || this.recorder.state !== "recording") return;
+    const { speechThreshold, voiceBandMinRatio, minSpeechMs, silenceMs, maxDurationMs } =
+      this.captureOpts;
+    const level = this.getLevel(voiceBandMinRatio);
+    const now = Date.now();
+
+    if (level > speechThreshold) {
       // hasSpoken only flips once the signal has stayed above threshold
       // continuously for minSpeechMs — a single loud frame (a cough, a word
-      // from another room) no longer counts as "the user started talking".
-      let hasSpoken = false;
-      let aboveThresholdSince: number | null = null;
-      let silenceStartedAt: number | null = null;
-      const startedAt = Date.now();
-
-      recorder.start(100);
-
-      const tick = () => {
-        if (recorder.state !== "recording") return;
-
-        const level = this.getLevel(voiceBandMinRatio);
-        const now = Date.now();
-
-        if (level > speechThreshold) {
-          if (!hasSpoken) {
-            if (aboveThresholdSince === null) aboveThresholdSince = now;
-            if (now - aboveThresholdSince >= minSpeechMs) hasSpoken = true;
-          }
-          silenceStartedAt = null;
-        } else {
-          aboveThresholdSince = null;
-          if (hasSpoken) {
-            if (silenceStartedAt === null) silenceStartedAt = now;
-            if (now - silenceStartedAt >= silenceMs) {
-              recorder.stop();
-              return;
-            }
-          }
-        }
-
-        if (now - startedAt >= maxDurationMs) {
-          recorder.stop();
+      // from another room, the assistant's own voice bleeding through)
+      // doesn't count as "the user started talking".
+      if (!this.hasSpoken) {
+        if (this.aboveThresholdSince === null) this.aboveThresholdSince = now;
+        if (now - this.aboveThresholdSince >= minSpeechMs) this.hasSpoken = true;
+      }
+      this.silenceStartedAt = null;
+    } else {
+      this.aboveThresholdSince = null;
+      if (this.hasSpoken) {
+        if (this.silenceStartedAt === null) this.silenceStartedAt = now;
+        if (now - this.silenceStartedAt >= silenceMs) {
+          this.recorder.stop();
           return;
         }
+      }
+    }
 
-        requestAnimationFrame(tick);
-      };
+    if (now - this.capturedAt >= maxDurationMs) {
+      this.recorder.stop();
+      return;
+    }
 
-      recorder.onstop = () => {
-        resolve(new Blob(chunks, { type: mimeType }));
-      };
+    this.rafId = requestAnimationFrame(this.tick);
+  };
 
-      requestAnimationFrame(tick);
+  /** True once sustained speech has been detected on the capture currently
+   * running — the single source of truth for "has the user started
+   * answering", shared between silence-detection and barge-in decisions. */
+  hasStartedSpeaking(): boolean {
+    return this.hasSpoken;
+  }
+
+  /** Resolves once the current capture stops — naturally (silence after
+   * speech), by timeout, or because stop() was called. Starts a capture
+   * first if one isn't already running (equivalent to the old
+   * recordUntilSilence behavior for callers that don't pre-start it). */
+  async waitForCapture(opts: CaptureOpts = {}): Promise<Blob> {
+    if (!this.recorder || this.recorder.state !== "recording") {
+      await this.startCapture(opts);
+    }
+    const recorder = this.recorder!;
+    if (recorder.state !== "recording") {
+      // Stopped already between the check above and here — return whatever
+      // was captured rather than hanging.
+      return new Blob(this.chunks, { type: this.mimeType });
+    }
+    const chunks = this.chunks;
+    const mimeType = this.mimeType;
+    return new Promise<Blob>((resolve) => {
+      recorder.addEventListener("stop", () => resolve(new Blob(chunks, { type: mimeType })), {
+        once: true,
+      });
     });
+  }
+
+  /** Convenience wrapper: start capturing now and wait for it to finish.
+   * Prefer calling startCapture() earlier (e.g. when the assistant starts
+   * speaking) and waitForCapture() afterwards when possible — starting and
+   * waiting back-to-back like this still has the old gap where speech
+   * before this call isn't captured. */
+  async recordUntilSilence(opts: CaptureOpts = {}): Promise<Blob> {
+    await this.startCapture(opts);
+    return this.waitForCapture(opts);
   }
 }

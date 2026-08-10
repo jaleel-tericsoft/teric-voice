@@ -26,11 +26,16 @@ export function LiveFormPanel({
   form,
   answers,
   activeFieldName,
+  activeLabel = "listening",
   onFieldChange,
 }: {
   form: FormDefinition;
   answers: AnswerMap;
   activeFieldName: string | null;
+  /** Label shown next to the highlighted field — "listening" while it's the
+   * question currently being asked, or something like "updated" when the
+   * highlight is flashing to show a just-applied correction instead. */
+  activeLabel?: string;
   onFieldChange: (fieldName: string, value: string | boolean) => void;
 }) {
   const version = form.versions.find((v) => v.version === form.currentVersion);
@@ -54,6 +59,7 @@ export function LiveFormPanel({
                   question={q}
                   value={answers[q.fieldName]}
                   active={activeFieldName === q.fieldName}
+                  activeLabel={activeLabel}
                   onChange={(v) => onFieldChange(q.fieldName, v)}
                 />
               ))}
@@ -69,11 +75,13 @@ function QuestionRow({
   question,
   value,
   active,
+  activeLabel,
   onChange,
 }: {
   question: FormQuestion;
   value: string | boolean | undefined;
   active: boolean;
+  activeLabel: string;
   onChange: (value: string | boolean) => void;
 }) {
   const answered = value !== undefined && value !== "";
@@ -101,7 +109,7 @@ function QuestionRow({
         {active ? (
           <span className="flex items-center gap-1 text-[10px] font-medium text-teal">
             <span className="size-1.5 animate-pulse rounded-full bg-teal" />
-            listening
+            {activeLabel}
           </span>
         ) : answered ? (
           <CheckCircle2 className="size-3.5 text-success" />

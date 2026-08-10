@@ -48,14 +48,24 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           text,
           model_id: MODEL_ID,
-          // Tuned for a more natural, conversational delivery rather than a
-          // flat/robotic read: stability slightly below default lets some
-          // natural pitch/pace variation through, a touch of style adds
-          // expressiveness, and speaker boost improves clarity/fidelity.
+          // Same settings object for every request regardless of which
+          // voice was picked — female and male get identical treatment,
+          // never a voice-specific tweak.
+          //
+          // Previously stability: 0.42 / style: 0.3, chosen for a more
+          // expressive, less robotic read. In practice that pushed some
+          // premade voices (Rachel/female noticeably more than Adam/male)
+          // past what eleven_flash_v2_5 renders reliably at — clipped or
+          // dropped words and occasional mispronunciation. Both knobs are
+          // pulled back toward ElevenLabs' own reliability guidance: higher
+          // stability and lower style consistently reduce those artifacts,
+          // at the cost of a little of the expressiveness the lower values
+          // were going for. similarity_boost/use_speaker_boost are
+          // unrelated to that failure mode and are unchanged.
           voice_settings: {
-            stability: 0.42,
+            stability: 0.58,
             similarity_boost: 0.8,
-            style: 0.3,
+            style: 0.12,
             use_speaker_boost: true,
           },
         }),

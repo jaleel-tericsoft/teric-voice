@@ -106,7 +106,7 @@ export function EntryPdfDocument({
             <Text style={styles.metaLine}>Entry ID: {entry.id}</Text>
             <Text style={styles.metaLine}>Form Version: v{entry.formVersion}</Text>
             <Text style={styles.metaLine}>
-              Submitted: {new Date(entry.submittedAt ?? entry.createdAt).toLocaleDateString("en-IN", {
+              Submitted: {new Date(entry.submittedAt ?? entry.createdAt).toLocaleDateString("en-GB", {
                 day: "2-digit",
                 month: "short",
                 year: "numeric",
@@ -146,7 +146,7 @@ export function EntryPdfDocument({
           <Text
             style={styles.footerText}
             render={({ pageNumber, totalPages }) =>
-              `Page ${pageNumber} of ${totalPages} · ${generatedAt.toLocaleString("en-IN", {
+              `Page ${pageNumber} of ${totalPages} · ${generatedAt.toLocaleString("en-GB", {
                 day: "2-digit",
                 month: "short",
                 year: "numeric",

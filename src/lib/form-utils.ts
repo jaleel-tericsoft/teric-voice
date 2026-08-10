@@ -47,7 +47,7 @@ export function formatAnswerValue(
   if (q?.fieldType === "date" && typeof value === "string") {
     const d = new Date(value);
     if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleDateString("en-IN", {
+      return d.toLocaleDateString("en-GB", {
         day: "2-digit",
         month: "short",
         year: "numeric",

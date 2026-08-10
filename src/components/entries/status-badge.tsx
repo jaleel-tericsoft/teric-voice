@@ -57,7 +57,12 @@ export function EntryStatusBadge({
       <Badge
         variant="ghost"
         className={cn(
-          "rounded-full px-2.5 py-1 font-medium",
+          // pointer-events-none: these are informational chips, not
+          // controls — without it, Badge's "ghost" variant applies its
+          // hover state (a color/background swap meant for interactive
+          // use) just from the mouse passing over it, which looked like
+          // the status was changing.
+          "pointer-events-none rounded-full px-2.5 py-1 font-medium",
           inProgress ? "bg-info/10 text-info" : "bg-success/15 text-success"
         )}
       >
@@ -70,7 +75,7 @@ export function EntryStatusBadge({
   return (
     <Badge
       variant="ghost"
-      className={cn("rounded-full px-2.5 py-1 font-medium", cfg.className)}
+      className={cn("pointer-events-none rounded-full px-2.5 py-1 font-medium", cfg.className)}
     >
       {cfg.label}
     </Badge>
@@ -92,7 +97,7 @@ export function EmailStatusBadge({ status }: { status: EmailStatus }) {
   return (
     <Badge
       variant="ghost"
-      className={cn("rounded-full px-2.5 py-1 font-medium", cfg.className)}
+      className={cn("pointer-events-none rounded-full px-2.5 py-1 font-medium", cfg.className)}
     >
       {cfg.label}
     </Badge>

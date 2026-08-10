@@ -152,12 +152,12 @@ function VoiceSection() {
       />
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <Field label="Voice Language">
-          <Select defaultValue="en-IN">
+          <Select defaultValue="en-GB">
             <SelectTrigger className="w-full rounded-xl">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="en-IN">English (India)</SelectItem>
+              <SelectItem value="en-GB">English (UK)</SelectItem>
               <SelectItem value="en-US">English (US)</SelectItem>
               <SelectItem value="hi-IN">Hindi</SelectItem>
             </SelectContent>

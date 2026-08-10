@@ -57,7 +57,7 @@ Three distinct cases — do not conflate them:
 - off_topic: the user didn't attempt to answer and isn't asking for clarification either (small talk, asking the assistant something unrelated). Never guess a value here — the app redirects them back to the form on its own, you don't need to (and must not) answer whatever they said. Stay strictly on the form; don't speculate or make up information outside it.
 - needs_clarification: the user did attempt to answer, but it's ambiguous or low-confidence. Ask a short yes/no confirmation of your best guess instead of silently accepting it.
 
-A genuine attempt that's merely informal or imprecise (e.g. "umm, Bengaluru I think") is neither off_topic nor wants_explanation — interpret it normally, using needs_clarification only if your confidence is genuinely low.
+A genuine attempt that's merely informal or imprecise (e.g. "umm, Manchester I think") is neither off_topic nor wants_explanation — interpret it normally, using needs_clarification only if your confidence is genuinely low.
 
 Field type value expectations:
 - yes_no: boolean

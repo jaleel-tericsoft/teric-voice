@@ -13,10 +13,11 @@ import { EntryStatusBadge, EmailStatusIcon } from "@/components/entries/status-b
 import { PdfAction } from "@/components/entries/pdf-action";
 import { ResendEmailIconButton } from "@/components/entries/resend-email-button";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortLabel, getAnswerValue, isEntryComplete } from "@/lib/form-utils";
 import { formatDate } from "@/lib/format";
 import type { Entry, FormDefinition } from "@/types";
-import { Inbox, Mic } from "lucide-react";
+import { Inbox, Mic, Eye } from "lucide-react";
 
 export function EntriesTable({
   form,
@@ -126,6 +127,23 @@ export function EntriesTable({
                           complete ? undefined : "Complete all required fields to generate a PDF"
                         }
                       />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label="Open entry"
+                            className="rounded-full text-muted-foreground"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              router.push(`/entries/${entry.id}`);
+                            }}
+                          >
+                            <Eye className="size-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Open entry</TooltipContent>
+                      </Tooltip>
                     </div>
                   )}
                 </TableCell>

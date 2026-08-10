@@ -8,6 +8,7 @@ export interface Interpretation {
   needs_clarification: boolean;
   clarification_question: string | null;
   off_topic: boolean;
+  off_topic_reply: string | null;
 }
 
 export interface ReviewCommand {

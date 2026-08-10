@@ -86,6 +86,39 @@ function questionPrompt(q: FormQuestion, attempt: number): string {
   return text;
 }
 
+type MessageLine = { text: string; kind: "sentence" | "option" };
+
+/** Reformats one spoken assistant turn for display: one sentence per line
+ * instead of a single dense paragraph, and a spoken "Your options are: A, B,
+ * C." sentence expanded into its own labeled list — so a dropdown's choices
+ * are actually scannable instead of buried in running text. Speech itself is
+ * unaffected; this only changes what's rendered. */
+function formatSpokenMessage(text: string): MessageLine[] {
+  if (!text.trim()) return [];
+
+  const sentences = text
+    .split(/(?<=[.!?])\s+(?=["A-Z0-9])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const lines: MessageLine[] = [];
+  for (const sentence of sentences) {
+    const optionsMatch = sentence.match(/^Your options are:\s*(.+?)\.?$/i);
+    if (optionsMatch) {
+      lines.push({ text: "Your options are:", kind: "sentence" });
+      optionsMatch[1]
+        .replace(/,?\s+or\s+/i, ", ")
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean)
+        .forEach((opt) => lines.push({ text: opt, kind: "option" }));
+    } else {
+      lines.push({ text: sentence, kind: "sentence" });
+    }
+  }
+  return lines;
+}
+
 /** Chrome/Safari block audio.play() without a real click preceding it —
  * calling this from inside the "Start" button's onClick unlocks autoplay
  * for the rest of the tab, so later programmatic TTS playback isn't silently
@@ -276,9 +309,15 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
             }
           }
 
-          // Genuinely off-topic — redirect, don't burn a confirmation
-          // round-trip on it.
-          await speak(`Let's stay focused on the form. ${questionPrompt(q, 0)}`);
+          // Genuinely off-topic — actually answer what they asked (or
+          // respond to the small talk), then pick the form back up. A bare
+          // "let's stay focused" dodge isn't a real answer and reads as
+          // scripted rather than a natural assistant.
+          const reply = interpretation.off_topic_reply?.trim();
+          overridePrompt = reply
+            ? `${reply} Now, back to the form — ${questionPrompt(q, 0)}`
+            : questionPrompt(q, 0);
+          attempt--; // answering a real question isn't a failed attempt at this one
           continue;
         }
 
@@ -589,12 +628,22 @@ export function VoiceExperience({ form }: { form: FormDefinition }) {
 
               <div className="flex max-w-md flex-col items-center gap-3 text-center">
                 {!error && (
-                  <p
-                    key={assistantText}
-                    className="animate-fade-in-up text-xl font-semibold leading-snug text-white"
-                  >
-                    {assistantText}
-                  </p>
+                  <div key={assistantText} className="animate-fade-in-up flex flex-col items-center gap-1.5">
+                    {formatSpokenMessage(assistantText).map((line, i) =>
+                      line.kind === "option" ? (
+                        <span
+                          key={i}
+                          className="rounded-full bg-white/10 px-3 py-1 text-sm font-medium text-white/85"
+                        >
+                          {line.text}
+                        </span>
+                      ) : (
+                        <p key={i} className="text-lg leading-snug font-semibold text-white">
+                          {line.text}
+                        </p>
+                      )
+                    )}
+                  </div>
                 )}
                 {userText && !error && (
                   <p key={userText} className="animate-fade-in-up text-sm text-white/50">

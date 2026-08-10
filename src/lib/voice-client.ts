@@ -239,9 +239,7 @@ export class MicSession {
   private rafId = 0;
   private captureOpts: ResolvedCaptureOpts = MicSession.resolveCaptureOpts({});
 
-  // Tracked continuously for as long as a capture is running — including
-  // while the assistant is still talking, since capture now starts at the
-  // same moment the assistant begins speaking (see startCapture).
+  // Tracked continuously for as long as a capture is running.
   private hasSpoken = false;
   private aboveThresholdSince: number | null = null;
   private silenceStartedAt: number | null = null;
@@ -250,10 +248,10 @@ export class MicSession {
   private static resolveCaptureOpts(opts: CaptureOpts): ResolvedCaptureOpts {
     const defaults = SENSITIVITY_PRESETS.medium;
     return {
-      // Generous: this clock now starts when capture begins, which is as
-      // early as the assistant's speech itself — it has to comfortably
-      // outlast a long TTS question, not just the user's answer.
-      maxDurationMs: opts.maxDurationMs ?? 20000,
+      // Safety net if the user never says anything at all — capture only
+      // starts once the assistant has finished asking, so this only needs
+      // to cover a real (if slow) answer, not the question itself.
+      maxDurationMs: opts.maxDurationMs ?? 12000,
       silenceMs: opts.silenceMs ?? 700, // wait after the user stops before treating the answer as done
       speechThreshold: opts.speechThreshold ?? defaults.speechThreshold,
       voiceBandMinRatio: opts.voiceBandMinRatio ?? defaults.voiceBandMinRatio,
@@ -325,12 +323,14 @@ export class MicSession {
 
   /**
    * Starts recording immediately and begins tracking speech/silence from
-   * this instant — call this as early as possible, ideally the moment the
-   * assistant starts speaking (not after it finishes). That way, if the
-   * user starts answering mid-sentence — very common in natural
-   * conversation — those first words are already inside the recording
-   * instead of being lost in the gap between "assistant stops talking" and
-   * "we start listening" that used to clip them, forcing a repeat.
+   * this instant. Deliberately not called until the assistant has actually
+   * finished talking — starting it earlier, during TTS playback, sounded
+   * good in theory (catches the user if they answer early) but in practice
+   * the assistant's own voice reliably leaked back into the mic (browsers
+   * don't cancel echo from a plain <audio> element the way they do for a
+   * real WebRTC call) and got mistaken for the user, firing false triggers
+   * on nearly every turn. Starting clean once the question is over avoids
+   * that entirely.
    *
    * Safe to call repeatedly: a capture already in progress is left alone.
    */
@@ -357,17 +357,6 @@ export class MicSession {
 
     recorder.start(100);
     this.rafId = requestAnimationFrame(this.tick);
-  }
-
-  /** Abandons whatever's being captured right now (if anything) and starts
-   * a completely clean one — used when audio captured so far is known to
-   * be contaminated (e.g. the user talked over a question that was still
-   * being asked) and shouldn't be treated as part of the real answer. */
-  async restartCapture(opts: CaptureOpts = {}): Promise<void> {
-    if (this.rafId) cancelAnimationFrame(this.rafId);
-    if (this.recorder && this.recorder.state === "recording") this.recorder.stop();
-    this.recorder = null;
-    await this.startCapture(opts);
   }
 
   private tick = () => {
@@ -406,18 +395,11 @@ export class MicSession {
     this.rafId = requestAnimationFrame(this.tick);
   };
 
-  /** True once sustained speech has been detected on the capture currently
-   * running — used both to drive silence-detection and, by the caller, to
-   * notice after a question finishes that the user had already started
-   * talking over it. */
-  hasStartedSpeaking(): boolean {
-    return this.hasSpoken;
-  }
-
   /** Resolves once the current capture stops — naturally (silence after
    * speech), by timeout, or because stop() was called. Starts a capture
-   * first if one isn't already running (equivalent to the old
-   * recordUntilSilence behavior for callers that don't pre-start it). */
+   * first if one isn't already running — which, in practice, is every
+   * call: nothing pre-starts capture anymore (see startCapture's comment),
+   * so this is what actually kicks off recording the user's answer. */
   async waitForCapture(opts: CaptureOpts = {}): Promise<Blob> {
     if (!this.recorder || this.recorder.state !== "recording") {
       await this.startCapture(opts);
@@ -435,15 +417,5 @@ export class MicSession {
         once: true,
       });
     });
-  }
-
-  /** Convenience wrapper: start capturing now and wait for it to finish.
-   * Prefer calling startCapture() earlier (e.g. when the assistant starts
-   * speaking) and waitForCapture() afterwards when possible — starting and
-   * waiting back-to-back like this still has the old gap where speech
-   * before this call isn't captured. */
-  async recordUntilSilence(opts: CaptureOpts = {}): Promise<Blob> {
-    await this.startCapture(opts);
-    return this.waitForCapture(opts);
   }
 }

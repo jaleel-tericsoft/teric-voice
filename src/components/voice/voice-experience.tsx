@@ -332,35 +332,22 @@ export function VoiceExperience({
       setAssistantText(text);
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return;
-      // Start capturing the mic now, before playback even begins — not to
-      // interrupt with it, just so nothing said early is lost.
-      mic.startCapture(captureOpts).catch(() => {});
-      // No barge-in: the assistant always finishes the question in full,
-      // instead of cutting itself off mid-sentence.
+      // Mic is left alone during playback — capturing while the assistant
+      // is also making sound meant its own TTS echo (which browsers don't
+      // reliably cancel out for a plain <audio> element, only for WebRTC
+      // loopback) kept satisfying the "user is speaking" check on its own,
+      // triggering a false "let me finish" on essentially every question.
+      // No barge-in either: the assistant always finishes asking in full.
       await speakText(text, { voice: voiceGenderRef.current });
-      if (cancelledRef.current) return;
-
-      if (mic.hasStartedSpeaking()) {
-        // They started answering before the question was actually
-        // finished — whatever got captured overlaps the question itself,
-        // so it's not a clean recording of their real answer. Ask them to
-        // hold on, then open a fresh recording once they've heard that.
-        await mic.restartCapture(captureOpts);
-        setOrbState("speaking");
-        setAssistantText("Sorry, let me finish asking first — go ahead now.");
-        await speakText("Sorry, let me finish asking first — go ahead now.", {
-          voice: voiceGenderRef.current,
-        });
-      }
     }
 
     async function listenAndTranscribe(): Promise<string> {
       setOrbState("listening");
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return "";
-      // Continues the capture speak() already started (or starts one fresh,
-      // if this is reached some other way) — doesn't discard whatever was
-      // already recorded since the question finished.
+      // Always a clean, fresh capture that only starts once the assistant
+      // has genuinely gone quiet — nothing of its own voice in it to
+      // mistake for the user, and no earlier stale state to trip over.
       const clip = await mic.waitForCapture(captureOpts);
       if (cancelledRef.current) return "";
       setOrbState("thinking");
@@ -626,21 +613,10 @@ export function VoiceExperience({
       setAssistantText(text);
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return;
-      // Same overlap trick as the conversation phase — start capturing
-      // before playback begins so nothing said early is lost.
-      mic.startCapture(captureOpts).catch(() => {});
-      // No barge-in here either — always finish speaking first.
+      // Mic stays untouched during playback — see the matching comment in
+      // the conversation-phase speak() for why (TTS echo was masquerading
+      // as the user talking, firing "let me finish" on nearly every turn).
       await speakText(text, { voice: voiceGenderRef.current }).catch(() => {});
-      if (cancelledRef.current) return;
-
-      if (mic.hasStartedSpeaking()) {
-        await mic.restartCapture(captureOpts);
-        setOrbState("speaking");
-        setAssistantText("Sorry, let me finish first — go ahead now.");
-        await speakText("Sorry, let me finish first — go ahead now.", {
-          voice: voiceGenderRef.current,
-        }).catch(() => {});
-      }
     }
 
     async function run() {

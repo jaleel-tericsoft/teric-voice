@@ -27,7 +27,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${fontSans.variable} ${fontMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      {/* suppressHydrationWarning: some browser extensions (e.g. ColorZilla)
+          inject attributes like cz-shortcut-listen onto <body> before React
+          hydrates, which otherwise trips a false-positive hydration
+          mismatch warning on every page — this is the standard, React-
+          recommended way to silence that specific class of noise without
+          hiding real hydration bugs elsewhere in the tree. */}
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <TooltipProvider delayDuration={200}>
           <FormsProvider>
             <EntriesProvider>{children}</EntriesProvider>

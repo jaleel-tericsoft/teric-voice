@@ -1,10 +1,54 @@
+"use client";
+
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { Mic } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Mic, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageContent />
+    </Suspense>
+  );
+}
+
+function LoginPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(data?.error || "Incorrect email or password");
+        return;
+      }
+      const next = searchParams.get("next") || "/dashboard";
+      router.push(next);
+      router.refresh();
+    } catch {
+      setError("Couldn't reach the server — try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="flex min-h-dvh w-full items-center justify-center bg-canvas p-3">
       <div className="grid w-full max-w-4xl grid-cols-1 overflow-hidden rounded-3xl bg-background shadow-sm ring-1 ring-black/[0.03] lg:grid-cols-2">
@@ -66,7 +110,13 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <form className="flex flex-col gap-4">
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+            {error && (
+              <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
+                <AlertCircle className="size-3.5 shrink-0" />
+                {error}
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="email" className="text-xs font-medium text-muted-foreground">
                 Email
@@ -75,7 +125,9 @@ export default function LoginPage() {
                 id="email"
                 type="email"
                 placeholder="you@company.com"
-                defaultValue="oliver@chilternmotorgroup.co.uk"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
                 className="h-11 rounded-xl"
               />
             </div>
@@ -91,12 +143,14 @@ export default function LoginPage() {
               <Input
                 id="password"
                 type="password"
-                defaultValue="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
                 className="h-11 rounded-xl"
               />
             </div>
-            <Button asChild className="mt-2 h-11 rounded-full text-sm">
-              <Link href="/dashboard">Sign in</Link>
+            <Button type="submit" disabled={submitting} className="mt-2 h-11 rounded-full text-sm">
+              {submitting ? "Signing in…" : "Sign in"}
             </Button>
           </form>
 

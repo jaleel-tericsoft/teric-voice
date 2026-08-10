@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except the template, which has no real values and documents the env
+# vars a fresh clone/deploy needs — meant to be committed.
+!.env.local.example
 
 # vercel
 .vercel

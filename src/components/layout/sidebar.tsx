@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutGrid,
   Inbox,
@@ -24,6 +24,16 @@ const primaryNav = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  async function handleLogout() {
+    // Clears the session cookie server-side — just navigating to /login
+    // without this would leave the cookie valid, so middleware would let
+    // you straight back in without re-entering the password.
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <aside className="flex h-full w-[264px] shrink-0 flex-col rounded-3xl bg-sidebar px-4 py-5 text-sidebar-foreground">
@@ -85,13 +95,14 @@ export function Sidebar() {
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Link
-              href="/login"
+            <button
+              type="button"
+              onClick={handleLogout}
               aria-label="Logout"
               className="flex size-9 shrink-0 items-center justify-center rounded-xl text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
               <LogOut className="size-[17px]" strokeWidth={2} />
-            </Link>
+            </button>
           </TooltipTrigger>
           <TooltipContent side="top">Logout</TooltipContent>
         </Tooltip>

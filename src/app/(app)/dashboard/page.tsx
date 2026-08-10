@@ -11,6 +11,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
+import { StartVoiceFormButton } from "@/components/layout/start-voice-form-button";
 import { EntryStatusBadge } from "@/components/entries/status-badge";
 import { currentUser } from "@/lib/mock-data";
 import { useFormsStore } from "@/lib/forms-store";
@@ -43,13 +44,7 @@ export default function DashboardPage() {
             Kick off a new entry hands-free — the assistant asks the
             questions, listens, and fills the form as you speak.
           </p>
-          <Link
-            href="/voice/new?form=vehicle-service-upsell"
-            className="flex w-fit items-center gap-2 rounded-full bg-teal px-5 py-2.5 text-sm font-semibold text-teal-foreground transition-transform hover:bg-[#256b76] active:scale-[0.98]"
-          >
-            <Mic className="size-4" strokeWidth={2.5} />
-            Start Voice Form
-          </Link>
+          <StartVoiceFormButton className="flex w-fit items-center gap-2 rounded-full bg-teal px-5 py-2.5 text-sm font-semibold text-teal-foreground transition-transform hover:bg-[#256b76] active:scale-[0.98]" />
         </div>
         <div className="pointer-events-none absolute -right-10 top-1/2 size-64 -translate-y-1/2 rounded-full bg-[#1f5a63]/30 blur-3xl" />
         <div className="pointer-events-none absolute right-6 top-1/2 size-40 -translate-y-1/2 rounded-full border border-white/15" />

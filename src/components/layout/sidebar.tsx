@@ -10,6 +10,7 @@ import {
   Mic,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { StartVoiceFormButton } from "@/components/layout/start-voice-form-button";
 
 const primaryNav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
@@ -25,7 +26,7 @@ export function Sidebar() {
     <aside className="flex h-full w-[264px] shrink-0 flex-col rounded-3xl bg-sidebar px-4 py-5 text-sidebar-foreground">
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-2 pb-6">
-        <div className="flex size-8 items-center justify-center rounded-xl bg-lime text-lime-foreground">
+        <div className="flex size-8 items-center justify-center rounded-xl bg-teal text-teal-foreground">
           <Mic className="size-4" strokeWidth={2.5} />
         </div>
         <span className="text-[15px] font-bold tracking-tight">TericVoice</span>
@@ -62,13 +63,7 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-auto pt-6">
-        <Link
-          href="/voice/new?form=vehicle-service-upsell"
-          className="flex items-center justify-center gap-2 rounded-full bg-teal px-4 py-3 text-[14px] font-semibold text-teal-foreground transition-transform hover:bg-[#18464d] active:scale-[0.98]"
-        >
-          <Mic className="size-4" strokeWidth={2.5} />
-          Start Voice Form
-        </Link>
+        <StartVoiceFormButton className="flex w-full items-center justify-center gap-2 rounded-full bg-teal px-4 py-3 text-[14px] font-semibold text-teal-foreground transition-transform hover:bg-[#18464d] active:scale-[0.98]" />
       </div>
     </aside>
   );

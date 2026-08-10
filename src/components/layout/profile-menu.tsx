@@ -30,7 +30,7 @@ export function ProfileMenu() {
           className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition-colors hover:bg-muted"
         >
           <Avatar size="sm">
-            <AvatarFallback className="bg-lime text-lime-foreground font-semibold">
+            <AvatarFallback className="bg-teal text-teal-foreground font-semibold">
               {initials(currentUser.name)}
             </AvatarFallback>
           </Avatar>

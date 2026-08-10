@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 
@@ -10,7 +11,9 @@ export default function AppLayout({
     <div className="flex h-dvh w-full gap-3 bg-canvas p-3">
       <Sidebar />
       <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-3xl bg-background shadow-sm ring-1 ring-black/[0.03]">
-        <Topbar />
+        <Suspense fallback={<div className="h-[68px] shrink-0" />}>
+          <Topbar />
+        </Suspense>
         <div className="no-scrollbar flex-1 overflow-y-auto px-6 pb-8">
           {children}
         </div>

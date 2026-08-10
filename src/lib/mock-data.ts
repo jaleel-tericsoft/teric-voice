@@ -221,6 +221,7 @@ export const vehicleServiceForm: FormDefinition = {
               questionText: "What is the best contact number for the customer?",
               fieldType: "phone",
               required: true,
+              columnLabel: "Customer Contact",
             },
             {
               id: "q_contact_email",

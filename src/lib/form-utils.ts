@@ -80,3 +80,15 @@ export function getAnswerValue(
   if (Array.isArray(found.value)) return found.value.join(", ");
   return String(found.value);
 }
+
+/** Powers the topbar's global search: true if `query` shows up anywhere a
+ * user would recognise the entry by — its ID, its status, or any answer
+ * value (formatted the same way the table displays it). Case-insensitive,
+ * substring match. */
+export function entryMatchesQuery(form: FormDefinition, entry: Entry, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (entry.id.toLowerCase().includes(q)) return true;
+  if (entry.status.replace(/_/g, " ").toLowerCase().includes(q)) return true;
+  return entry.answers.some((a) => formatAnswerValue(form, a).toLowerCase().includes(q));
+}

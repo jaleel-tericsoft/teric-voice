@@ -72,6 +72,10 @@ export interface FormQuestion {
    * "future" rejects a date before today (e.g. a preferred appointment
    * date). Undefined means no constraint. */
   dateConstraint?: "past" | "future";
+  /** Overrides the auto-generated (from fieldName) table column header —
+   * for a field whose plain fieldName reads ambiguously in a compact
+   * column ("Contact Number" — of whom?), spell out whose/what it is. */
+  columnLabel?: string;
 }
 
 export interface FormSection {

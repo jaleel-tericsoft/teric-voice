@@ -53,6 +53,13 @@ interface DraftQuestion {
   fieldType: FieldType;
   required: boolean;
   optionsText: string; // comma-separated, used for single/multi select
+  /** Set only when this question came from an existing form being edited —
+   * preserves its real fieldName instead of re-deriving one from the
+   * current question text, which wouldn't necessarily match (a form's
+   * fieldName isn't always just a slug of its question text) and would
+   * silently orphan every existing entry's answer for that field, plus
+   * break the Entry List Columns preselection below. */
+  fieldName?: string;
 }
 
 interface DraftSection {
@@ -90,6 +97,7 @@ function sectionsFromForm(form: FormDefinition): DraftSection[] {
       fieldType: q.fieldType,
       required: q.required,
       optionsText: q.options?.map((o) => o.label).join(", ") ?? "",
+      fieldName: q.fieldName,
     })),
   }));
 }
@@ -121,14 +129,15 @@ function NewFormPageContent() {
     () => editingForm?.entryListColumns ?? []
   );
 
-  // fieldName is derived from question text, recomputed on every render —
+  // fieldName is preserved from the original question when editing, and
+  // only derived fresh from question text for genuinely new questions —
   // keeps the entry-list-column picker (and the final saved form) in sync
-  // as the user edits question wording.
+  // as the user edits question wording without renaming existing fields.
   const allFields = useMemo(() => {
     return sections.flatMap((s) =>
       s.questions
         .filter((q) => q.questionText.trim())
-        .map((q) => ({ fieldName: slugify(q.questionText), label: q.questionText }))
+        .map((q) => ({ fieldName: q.fieldName ?? slugify(q.questionText), label: q.questionText }))
     );
   }, [sections]);
 
@@ -196,7 +205,7 @@ function NewFormPageContent() {
           .map((q, qi) => ({
             id: q.id,
             order: qi + 1,
-            fieldName: slugify(q.questionText),
+            fieldName: q.fieldName ?? slugify(q.questionText),
             questionText: q.questionText.trim(),
             fieldType: q.fieldType,
             required: q.required,
@@ -416,7 +425,7 @@ function NewFormPageContent() {
 
                     {q.questionText.trim() && (
                       <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">
-                        {slugify(q.questionText)}
+                        {q.fieldName ?? slugify(q.questionText)}
                       </span>
                     )}
                   </div>

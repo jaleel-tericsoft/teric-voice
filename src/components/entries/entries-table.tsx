@@ -9,8 +9,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { EntryStatusBadge, EmailStatusBadge } from "@/components/entries/status-badge";
+import { EntryStatusBadge, EmailStatusIcon } from "@/components/entries/status-badge";
 import { PdfAction } from "@/components/entries/pdf-action";
+import { ResendEmailIconButton } from "@/components/entries/resend-email-button";
 import { Button } from "@/components/ui/button";
 import { shortLabel, getAnswerValue, isEntryComplete } from "@/lib/form-utils";
 import { formatDate } from "@/lib/format";
@@ -70,7 +71,7 @@ export function EntriesTable({
               Status
             </TableHead>
             <TableHead className="pr-4 text-right text-xs font-semibold text-muted-foreground">
-              PDF
+              Actions
             </TableHead>
           </TableRow>
         </TableHeader>
@@ -96,10 +97,10 @@ export function EntriesTable({
                   {formatDate(entry.createdAt)}
                 </TableCell>
                 <TableCell>
-                  <EmailStatusBadge status={entry.email.status} />
+                  <EmailStatusIcon status={entry.email.status} />
                 </TableCell>
                 <TableCell>
-                  <EntryStatusBadge status={entry.status} />
+                  <EntryStatusBadge status={entry.status} simple />
                 </TableCell>
                 <TableCell className="pr-4 text-right">
                   {resumable ? (
@@ -115,14 +116,17 @@ export function EntriesTable({
                       Resume
                     </Button>
                   ) : (
-                    <PdfAction
-                      status={entry.pdf.status}
-                      entry={entry}
-                      form={form}
-                      disabledReason={
-                        complete ? undefined : "Complete all required fields to generate a PDF"
-                      }
-                    />
+                    <div className="flex items-center justify-end gap-1">
+                      <ResendEmailIconButton entry={entry.id} />
+                      <PdfAction
+                        status={entry.pdf.status}
+                        entry={entry}
+                        form={form}
+                        disabledReason={
+                          complete ? undefined : "Complete all required fields to generate a PDF"
+                        }
+                      />
+                    </div>
                   )}
                 </TableCell>
               </TableRow>

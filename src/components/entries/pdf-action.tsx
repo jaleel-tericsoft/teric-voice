@@ -2,6 +2,7 @@
 
 import { FileText, Loader2, Eye, Download, RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEntryPdf } from "@/hooks/use-entry-pdf";
 import type { Entry, FormDefinition, PdfStatus } from "@/types";
 
@@ -94,43 +95,41 @@ export function PdfAction({
     }
 
     return (
-      <div className="flex items-center gap-1.5">
-        <Button
-          size="sm"
-          variant="secondary"
-          className="rounded-full text-xs"
-          onClick={(e) => {
-            e.stopPropagation();
-            pdfState.view();
-          }}
-        >
-          <Eye className="size-3.5" />
-          View
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Download PDF"
-          className="rounded-full"
-          onClick={(e) => {
-            e.stopPropagation();
-            pdfState.download();
-          }}
-        >
-          <Download className="size-3.5" />
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Regenerate PDF"
-          className="rounded-full text-muted-foreground"
-          onClick={(e) => {
-            e.stopPropagation();
-            pdfState.generate();
-          }}
-        >
-          <RefreshCw className="size-3.5" />
-        </Button>
+      <div className="flex items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Download PDF"
+              className="rounded-full text-muted-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                pdfState.download();
+              }}
+            >
+              <Download className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Download PDF</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="View PDF"
+              className="rounded-full text-muted-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                pdfState.view();
+              }}
+            >
+              <Eye className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>View PDF</TooltipContent>
+        </Tooltip>
       </div>
     );
   }

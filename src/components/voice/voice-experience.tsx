@@ -37,7 +37,6 @@ import {
   interpretAnswer,
   interpretReviewCommand,
   getSensitivityConfig,
-  createSustainedGate,
   getVoiceGender,
   setVoiceGender,
   type VoiceGender,
@@ -110,14 +109,6 @@ function buildEntry(params: {
     ],
   };
 }
-
-// Require noticeably louder speech to interrupt the assistant than to
-// simply be picked up while listening. This has to clear more than plain
-// stray noise — it has to be well above whatever echo of the assistant's
-// own TTS voice leaks back into the mic on a speaker (not headphones),
-// since that echo is just as "voice-shaped" as a real interruption and the
-// spectral gate alone can't tell the two apart.
-const BARGE_IN_LEVEL_MULTIPLIER = 1.8;
 
 const LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
@@ -216,7 +207,6 @@ export function VoiceExperience({
   );
   const [orbState, setOrbState] = useState<OrbState>("speaking");
   const [assistantText, setAssistantText] = useState("");
-  const [userText, setUserText] = useState("");
   const [activeField, setActiveField] = useState<string | null>(null);
   // Briefly flashes a field in the form preview when a correction lands on
   // it — separate from `activeField` (the question currently being asked)
@@ -331,42 +321,37 @@ export function VoiceExperience({
       current: new Set(Object.keys(answers)),
     };
 
-    async function speak(text: string): Promise<{ interrupted: boolean }> {
+    const captureOpts = {
+      speechThreshold: sensitivity.speechThreshold,
+      voiceBandMinRatio: sensitivity.voiceBandMinRatio,
+      minSpeechMs: sensitivity.minSpeechMs,
+    };
+
+    async function speak(text: string): Promise<void> {
       setOrbState("speaking");
       setAssistantText(text);
-      setUserText("");
       await isPaused(pausedRef, cancelledRef);
-      if (cancelledRef.current) return { interrupted: false };
-      // Start capturing the mic now, before playback even begins — if the
-      // user starts answering while the assistant is still mid-sentence
-      // (very natural, people don't wait for a hard stop), those words land
-      // in the same recording instead of being lost in the gap between
-      // "assistant stops" and "we start listening", which used to force
-      // people to repeat themselves.
-      mic.startCapture({
-        speechThreshold: sensitivity.speechThreshold,
-        voiceBandMinRatio: sensitivity.voiceBandMinRatio,
-        minSpeechMs: sensitivity.minSpeechMs,
-      }).catch(() => {});
-      // Built fresh for every call, not once for the whole session — a
-      // sustained gate remembers "how long has this been true" in its own
-      // closure, and reusing one across many separate playbacks let a stale
-      // timestamp from an earlier, incomplete trigger (say, a blip near the
-      // end of the previous question) instantly satisfy the sustain window
-      // the moment ANY level crossed threshold again — cutting the very
-      // next question off after a single word instead of requiring a fresh
-      // sustained trigger.
-      const bargeInCheck = createSustainedGate(
-        () =>
-          !pausedRef.current &&
-          mic.getLevel(sensitivity.voiceBandMinRatio) >
-            sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
-        sensitivity.bargeInSustainMs
-      );
-      // shouldInterrupt lets the user talk over the assistant instead of
-      // waiting for it to finish — this is what makes it actually listen
-      // mid-sentence rather than plowing through the whole question.
-      return speakText(text, { shouldInterrupt: bargeInCheck, voice: voiceGenderRef.current });
+      if (cancelledRef.current) return;
+      // Start capturing the mic now, before playback even begins — not to
+      // interrupt with it, just so nothing said early is lost.
+      mic.startCapture(captureOpts).catch(() => {});
+      // No barge-in: the assistant always finishes the question in full,
+      // instead of cutting itself off mid-sentence.
+      await speakText(text, { voice: voiceGenderRef.current });
+      if (cancelledRef.current) return;
+
+      if (mic.hasStartedSpeaking()) {
+        // They started answering before the question was actually
+        // finished — whatever got captured overlaps the question itself,
+        // so it's not a clean recording of their real answer. Ask them to
+        // hold on, then open a fresh recording once they've heard that.
+        await mic.restartCapture(captureOpts);
+        setOrbState("speaking");
+        setAssistantText("Sorry, let me finish asking first — go ahead now.");
+        await speakText("Sorry, let me finish asking first — go ahead now.", {
+          voice: voiceGenderRef.current,
+        });
+      }
     }
 
     async function listenAndTranscribe(): Promise<string> {
@@ -375,12 +360,8 @@ export function VoiceExperience({
       if (cancelledRef.current) return "";
       // Continues the capture speak() already started (or starts one fresh,
       // if this is reached some other way) — doesn't discard whatever was
-      // already recorded while the assistant was still talking.
-      const clip = await mic.waitForCapture({
-        speechThreshold: sensitivity.speechThreshold,
-        voiceBandMinRatio: sensitivity.voiceBandMinRatio,
-        minSpeechMs: sensitivity.minSpeechMs,
-      });
+      // already recorded since the question finished.
+      const clip = await mic.waitForCapture(captureOpts);
       if (cancelledRef.current) return "";
       setOrbState("thinking");
       return transcribeAudio(clip, languageRef.current); // throws on failure
@@ -407,8 +388,6 @@ export function VoiceExperience({
 
         if (!transcript.trim()) continue; // genuine silence — repeat the question
 
-        setUserText(transcript);
-
         if (SKIP_INTENT_RE.test(transcript.trim())) {
           if (!q.required) {
             await speak("No problem, skipping that one.");
@@ -427,6 +406,16 @@ export function VoiceExperience({
           options: q.options?.map((o) => o.value),
           transcript,
         });
+
+        if (interpretation.wants_explanation && interpretation.explanation) {
+          // Asking what the question/a term means, or for an example — a
+          // legitimate request about the form itself, not a bluff risk,
+          // since the explanation is grounded in the question's own data.
+          // Answer it, then pick the same question back up.
+          overridePrompt = `${interpretation.explanation} ${questionPrompt(q, 0)}`;
+          attempt--; // asking for clarification isn't a failed attempt at answering
+          continue;
+        }
 
         if (interpretation.off_topic) {
           // Doesn't answer the current question — but before assuming the
@@ -542,7 +531,6 @@ export function VoiceExperience({
         if (cancelledRef.current) return null;
         const confirmTranscript = await listenAndTranscribe();
         if (cancelledRef.current) return null;
-        setUserText(confirmTranscript);
 
         if (confirmTranscript.trim() && !NEGATIVE_RE.test(confirmTranscript)) {
           return interpretation.value;
@@ -605,7 +593,6 @@ export function VoiceExperience({
         setActiveField(null);
         setOrbState("idle");
         setAssistantText("All done — let's review your answers.");
-        setUserText("");
         setPhase("review"); // mic stays live — the review-phase effect below reuses it
       }
     }
@@ -628,34 +615,32 @@ export function VoiceExperience({
     const mic = micRef.current!;
     const reviewQuestions = getAllQuestions(form);
     const sensitivity = sensitivityRef.current;
+    const captureOpts = {
+      speechThreshold: sensitivity.speechThreshold,
+      voiceBandMinRatio: sensitivity.voiceBandMinRatio,
+      minSpeechMs: sensitivity.minSpeechMs,
+    };
 
     async function speak(text: string) {
       setOrbState("speaking");
       setAssistantText(text);
-      setUserText("");
       await isPaused(pausedRef, cancelledRef);
       if (cancelledRef.current) return;
       // Same overlap trick as the conversation phase — start capturing
-      // before playback begins so an early "actually, change..." doesn't
-      // lose its first words.
-      mic.startCapture({
-        speechThreshold: sensitivity.speechThreshold,
-        voiceBandMinRatio: sensitivity.voiceBandMinRatio,
-        minSpeechMs: sensitivity.minSpeechMs,
-      }).catch(() => {});
-      // Built fresh per call — see the matching comment in the
-      // conversation-phase speak() for why reusing one across many
-      // playbacks caused a false near-instant interruption.
-      const bargeInCheck = createSustainedGate(
-        () =>
-          !pausedRef.current &&
-          mic.getLevel(sensitivity.voiceBandMinRatio) >
-            sensitivity.speechThreshold * BARGE_IN_LEVEL_MULTIPLIER,
-        sensitivity.bargeInSustainMs
-      );
-      await speakText(text, { shouldInterrupt: bargeInCheck, voice: voiceGenderRef.current }).catch(
-        () => {}
-      );
+      // before playback begins so nothing said early is lost.
+      mic.startCapture(captureOpts).catch(() => {});
+      // No barge-in here either — always finish speaking first.
+      await speakText(text, { voice: voiceGenderRef.current }).catch(() => {});
+      if (cancelledRef.current) return;
+
+      if (mic.hasStartedSpeaking()) {
+        await mic.restartCapture(captureOpts);
+        setOrbState("speaking");
+        setAssistantText("Sorry, let me finish first — go ahead now.");
+        await speakText("Sorry, let me finish first — go ahead now.", {
+          voice: voiceGenderRef.current,
+        }).catch(() => {});
+      }
     }
 
     async function run() {
@@ -674,11 +659,7 @@ export function VoiceExperience({
         await isPaused(pausedRef, cancelledRef);
         if (cancelledRef.current) return;
 
-        const clip = await mic.waitForCapture({
-          speechThreshold: sensitivity.speechThreshold,
-          voiceBandMinRatio: sensitivity.voiceBandMinRatio,
-          minSpeechMs: sensitivity.minSpeechMs,
-        });
+        const clip = await mic.waitForCapture(captureOpts);
         if (cancelledRef.current) return;
         if (clip.size < 4000) continue; // essentially silence — keep waiting
 
@@ -686,8 +667,6 @@ export function VoiceExperience({
         const transcript = await transcribeAudio(clip, languageRef.current).catch(() => "");
         if (cancelledRef.current) return;
         if (!transcript.trim()) continue;
-
-        setUserText(transcript);
 
         const fields = reviewQuestions.map((q) => ({
           fieldName: q.fieldName,
@@ -901,22 +880,17 @@ export function VoiceExperience({
                       line.kind === "option" ? (
                         <span
                           key={i}
-                          className="rounded-full bg-white/10 px-3 py-1 text-sm font-medium text-white/85"
+                          className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/85"
                         >
                           {line.text}
                         </span>
                       ) : (
-                        <p key={i} className="text-lg leading-snug font-semibold text-white">
+                        <p key={i} className="text-sm leading-snug font-semibold text-white">
                           {line.text}
                         </p>
                       )
                     )}
                   </div>
-                )}
-                {userText && !error && (
-                  <p key={userText} className="animate-fade-in-up text-sm text-white/50">
-                    “{userText}”
-                  </p>
                 )}
               </div>
 

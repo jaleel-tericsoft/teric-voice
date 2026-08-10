@@ -1,6 +1,5 @@
-// Browser-side voice I/O: plays TTS audio (with barge-in support), records
-// the user's answer with silence detection, and calls the
-// transcribe/interpret API routes.
+// Browser-side voice I/O: plays TTS audio, records the user's answer with
+// silence detection, and calls the transcribe/interpret API routes.
 
 export interface Interpretation {
   value: string | boolean;
@@ -8,6 +7,8 @@ export interface Interpretation {
   needs_clarification: boolean;
   clarification_question: string | null;
   off_topic: boolean;
+  wants_explanation: boolean;
+  explanation: string | null;
 }
 
 export type VoiceGender = "female" | "male";
@@ -50,38 +51,19 @@ export interface SensitivityConfig {
    * "the user started talking" — filters a brief background blip (a word
    * from another room, a cough, a door) from triggering a false capture. */
   minSpeechMs: number;
-  /** Same idea, for interrupting the assistant mid-question (barge-in) —
-   * deliberately a bit longer, since a false barge-in is more disruptive
-   * than a false silence-detection trigger. */
-  bargeInSustainMs: number;
 }
 
 // "Low" = least sensitive (best in noisy rooms — requires louder, longer,
 // more voice-shaped signal). "High" = most sensitive (best for quiet rooms
 // with a soft speaker, but more prone to picking up background sound).
 const SENSITIVITY_PRESETS: Record<VoiceSensitivity, SensitivityConfig> = {
-  low: { speechThreshold: 0.085, voiceBandMinRatio: 0.65, minSpeechMs: 320, bargeInSustainMs: 450 },
-  medium: { speechThreshold: 0.055, voiceBandMinRatio: 0.55, minSpeechMs: 200, bargeInSustainMs: 320 },
-  high: { speechThreshold: 0.03, voiceBandMinRatio: 0.42, minSpeechMs: 110, bargeInSustainMs: 200 },
+  low: { speechThreshold: 0.085, voiceBandMinRatio: 0.65, minSpeechMs: 320 },
+  medium: { speechThreshold: 0.055, voiceBandMinRatio: 0.55, minSpeechMs: 200 },
+  high: { speechThreshold: 0.03, voiceBandMinRatio: 0.42, minSpeechMs: 110 },
 };
 
 export function getSensitivityConfig(level: VoiceSensitivity): SensitivityConfig {
   return SENSITIVITY_PRESETS[level];
-}
-
-/** Wraps a boolean check so it only reports true once the underlying
- * condition has held continuously for `sustainMs` — turns a single noisy
- * frame into a debounced, much more reliable signal. */
-export function createSustainedGate(check: () => boolean, sustainMs: number) {
-  let trueSince: number | null = null;
-  return function poll(): boolean {
-    if (check()) {
-      if (trueSince === null) trueSince = Date.now();
-      return Date.now() - trueSince >= sustainMs;
-    }
-    trueSince = null;
-    return false;
-  };
 }
 
 /** Reads {error, detail} off a failed route response and throws a message
@@ -377,6 +359,17 @@ export class MicSession {
     this.rafId = requestAnimationFrame(this.tick);
   }
 
+  /** Abandons whatever's being captured right now (if anything) and starts
+   * a completely clean one — used when audio captured so far is known to
+   * be contaminated (e.g. the user talked over a question that was still
+   * being asked) and shouldn't be treated as part of the real answer. */
+  async restartCapture(opts: CaptureOpts = {}): Promise<void> {
+    if (this.rafId) cancelAnimationFrame(this.rafId);
+    if (this.recorder && this.recorder.state === "recording") this.recorder.stop();
+    this.recorder = null;
+    await this.startCapture(opts);
+  }
+
   private tick = () => {
     if (!this.recorder || this.recorder.state !== "recording") return;
     const { speechThreshold, voiceBandMinRatio, minSpeechMs, silenceMs, maxDurationMs } =
@@ -414,8 +407,9 @@ export class MicSession {
   };
 
   /** True once sustained speech has been detected on the capture currently
-   * running — the single source of truth for "has the user started
-   * answering", shared between silence-detection and barge-in decisions. */
+   * running — used both to drive silence-detection and, by the caller, to
+   * notice after a question finishes that the user had already started
+   * talking over it. */
   hasStartedSpeaking(): boolean {
     return this.hasSpoken;
   }

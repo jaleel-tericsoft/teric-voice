@@ -33,7 +33,18 @@ const InterpretationSchema = z.object({
   off_topic: z
     .boolean()
     .describe(
-      "True if the transcript doesn't attempt to answer the question at all — small talk, a question back to the assistant, an unrelated remark, or silence-filler words. False for any genuine (even if unclear) attempt to answer."
+      "True if the transcript doesn't attempt to answer the question at all — small talk, a question back to the assistant, an unrelated remark, or silence-filler words. False for any genuine (even if unclear) attempt to answer, and false whenever wants_explanation is true."
+    ),
+  wants_explanation: z
+    .boolean()
+    .describe(
+      "True if the user is asking what the question or a term/word in it means, or asking for an example of what a valid answer looks like (e.g. \"what do you mean by odometer reading\", \"what counts as an upsell\", \"give me an example\"). This is a request for clarification about the form itself, not off_topic — never true at the same time as off_topic."
+    ),
+  explanation: z
+    .string()
+    .nullable()
+    .describe(
+      "Only used when wants_explanation is true: a brief, natural spoken explanation of the question/term, ending with a concrete example of a valid answer. Base this strictly on the question text, field type, and options given below — never introduce outside facts, business details, or anything not derivable from that. Null otherwise."
     ),
 });
 
@@ -41,11 +52,12 @@ const SYSTEM_PROMPT = `You interpret a spoken answer to a form question for a vo
 
 Given the question, the expected field type, and a raw speech transcript, extract the structured value the user intended — not the raw transcript. Understand natural variation (e.g. "yeah", "I do", "yes I have one" all mean yes for a yes_no field). If options were given for a single_select field, match spoken words to the closest option even if phrased differently.
 
-Two distinct failure cases — do not conflate them:
-- off_topic: the user didn't attempt to answer at all (small talk, asking the assistant something unrelated, an unrelated remark). Never guess a value here — the app redirects them back to the form on its own, you don't need to (and must not) answer whatever they said. Stay strictly on the form; don't speculate or make up information outside it.
+Three distinct cases — do not conflate them:
+- wants_explanation: the user is asking what the question or a term in it means, or wants an example answer. Explain it using only what's in the question/field type/options — never invent outside facts (pricing, policies, business specifics, anything not literally derivable from the question data). Always give a concrete example.
+- off_topic: the user didn't attempt to answer and isn't asking for clarification either (small talk, asking the assistant something unrelated). Never guess a value here — the app redirects them back to the form on its own, you don't need to (and must not) answer whatever they said. Stay strictly on the form; don't speculate or make up information outside it.
 - needs_clarification: the user did attempt to answer, but it's ambiguous or low-confidence. Ask a short yes/no confirmation of your best guess instead of silently accepting it.
 
-A genuine attempt that's merely informal or imprecise (e.g. "umm, Bengaluru I think") is NOT off_topic — interpret it normally, using needs_clarification only if your confidence is genuinely low.
+A genuine attempt that's merely informal or imprecise (e.g. "umm, Bengaluru I think") is neither off_topic nor wants_explanation — interpret it normally, using needs_clarification only if your confidence is genuinely low.
 
 Field type value expectations:
 - yes_no: boolean
@@ -80,6 +92,8 @@ export async function POST(req: NextRequest) {
       needs_clarification: false,
       clarification_question: null,
       off_topic: false,
+      wants_explanation: false,
+      explanation: null,
     });
   }
 

@@ -40,6 +40,7 @@ import {
   getVoiceGender,
   setVoiceGender,
   type VoiceGender,
+  type Interpretation,
 } from "@/lib/voice-client";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
@@ -66,6 +67,24 @@ function isSkipCommand(transcript: string): boolean {
   if (!trimmed) return false;
   if (trimmed.split(/\s+/).length > 8) return false;
   return SKIP_PHRASE_RE.test(trimmed);
+}
+
+const KM_TO_MILES = 0.621371;
+
+/** A distance question (e.g. odometer reading) asks for miles, but people
+ * often think and speak in kilometers — this converts a km figure to miles
+ * rather than silently storing the wrong-unit number as-is. The conversion
+ * itself is deterministic code, not left to the model — interpretAnswer
+ * only reports which unit was said, never does the math itself. No-op for
+ * anything that isn't a km-stated distance value. */
+function normalizeDistanceValue(
+  value: string | boolean,
+  statedUnit: Interpretation["stated_distance_unit"]
+): string | boolean {
+  if (statedUnit !== "km" || typeof value !== "string") return value;
+  const raw = Number(value.replace(/[^0-9.]/g, ""));
+  if (Number.isNaN(raw)) return value;
+  return String(Math.round(raw * KM_TO_MILES));
 }
 
 let entryIdCounter = 0;
@@ -495,11 +514,15 @@ export function VoiceExperience({
                     !targetInterpretation.off_topic &&
                     !targetInterpretation.needs_clarification
                   ) {
+                    const targetValue = normalizeDistanceValue(
+                      targetInterpretation.value,
+                      targetInterpretation.stated_distance_unit
+                    );
                     localRef.current = {
                       ...localRef.current,
-                      [target.fieldName]: targetInterpretation.value,
+                      [target.fieldName]: targetValue,
                     };
-                    setAnswers((prev) => ({ ...prev, [target.fieldName]: targetInterpretation.value }));
+                    setAnswers((prev) => ({ ...prev, [target.fieldName]: targetValue }));
                     flashHighlight(target.fieldName);
                   }
                 }
@@ -524,7 +547,7 @@ export function VoiceExperience({
         }
 
         if (!interpretation.needs_clarification) {
-          return interpretation.value;
+          return normalizeDistanceValue(interpretation.value, interpretation.stated_distance_unit);
         }
 
         // Low-confidence / ambiguous — confirm before committing.
@@ -534,7 +557,7 @@ export function VoiceExperience({
         if (cancelledRef.current) return null;
 
         if (confirmTranscript.trim() && !NEGATIVE_RE.test(confirmTranscript)) {
-          return interpretation.value;
+          return normalizeDistanceValue(interpretation.value, interpretation.stated_distance_unit);
         }
         // treated as "no" (or unheard) — loop back and re-ask the question
       }

@@ -46,6 +46,12 @@ const InterpretationSchema = z.object({
     .describe(
       "Only used when wants_explanation is true: a brief, natural spoken explanation of the question/term, ending with a concrete example of a valid answer. Base this strictly on the question text, field type, and options given below — never introduce outside facts, business details, or anything not derivable from that. Null otherwise."
     ),
+  stated_distance_unit: z
+    .enum(["km", "miles", "unspecified"])
+    .nullable()
+    .describe(
+      "Only for a number field that is a distance/mileage measurement (e.g. an odometer reading) — which unit the user actually said, if any: 'km' for kilometers/kilometres/kms, 'miles' for miles/mi, or 'unspecified' if they gave a bare number with no unit at all. Null for any field that isn't a distance measurement. Do not convert anything yourself — 'value' must stay the raw number exactly as spoken, in whatever unit they said it in (or with no unit if unspecified); unit conversion happens separately, in code."
+    ),
 });
 
 const SYSTEM_PROMPT = `You interpret a spoken answer to a form question for a voice-based data entry app.
@@ -63,7 +69,10 @@ Field type value expectations:
 - yes_no: boolean
 - single_select: must exactly match one of the given option values
 - date: ISO format YYYY-MM-DD
-- phone, number, short_text, long_text, email: cleaned-up text (e.g. spelled-out emails like "ahmed dot khan at example dot com" become "ahmed.khan@example.com")
+- number: plain digits, e.g. "sixty eight thousand" becomes "68000" — always convert spoken-out numbers to digits, regardless of anything said below about units
+- phone, short_text, long_text, email: cleaned-up text (e.g. spelled-out emails like "ahmed dot khan at example dot com" become "ahmed.khan@example.com")
+
+For a number field that's a distance/mileage reading: set stated_distance_unit to whichever unit the user actually said ("km", "miles", or "unspecified" if they gave no unit) — but keep "value" as plain digits in whatever unit they said (e.g. "sixty eight thousand kilometers" -> value "68000", stated_distance_unit "km"). Don't convert the unit yourself — that number-of-digits form is all that's needed, the km-to-miles conversion itself happens afterward in code.
 
 Tone for anything spoken back (clarification_question, explanation): warm, friendly, and polite — like a helpful person, never curt, commanding, or scolding. Calm and genuine, no exclamation marks or forced enthusiasm.`;
 
@@ -96,6 +105,7 @@ export async function POST(req: NextRequest) {
       off_topic: false,
       wants_explanation: false,
       explanation: null,
+      stated_distance_unit: null,
     });
   }
 

@@ -9,6 +9,7 @@ export interface Interpretation {
   off_topic: boolean;
   wants_explanation: boolean;
   explanation: string | null;
+  stated_distance_unit: "km" | "miles" | "unspecified" | null;
 }
 
 export type VoiceGender = "female" | "male";

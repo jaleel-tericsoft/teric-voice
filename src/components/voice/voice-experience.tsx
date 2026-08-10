@@ -50,11 +50,23 @@ const MAX_RETRIES = 2; // repeat the question up to this many times if unanswere
 const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
 const SUBMIT_INTENT_RE =
   /\b(submit|confirm(?:ed)?|that'?s (?:correct|right|it|all)|go ahead|looks good|yes,? submit)\b/i;
-// Deliberately anchored to the whole (trimmed) utterance — "skip" needs to
-// be the entire answer, not just a word that happens to appear inside a
-// real one (e.g. an answer that legitimately contains "pass" or "next").
-const SKIP_INTENT_RE =
-  /^(skip(?: (?:it|this|that|question))?|next question|n\/a|not applicable)[.!]?$/i;
+// Not anchored to the whole utterance — real speech wraps the core phrase
+// in other words ("please skip this one", "let's just skip that question"),
+// and requiring an exact match meant those never registered as a skip at
+// all, silently falling through to a normal (failing) answer attempt.
+const SKIP_PHRASE_RE = /\bskip\b|\bnext question\b|\bn\/a\b|\bnot applicable\b/i;
+
+/** True if the transcript is a request to skip the question rather than a
+ * genuine attempt to answer it. Guarded by word count so a real, longer
+ * answer that happens to contain "skip" (e.g. describing an engine that
+ * "skips at idle") isn't misread as a command — a bare skip request stays
+ * short even with a few polite words around it. */
+function isSkipCommand(transcript: string): boolean {
+  const trimmed = transcript.trim();
+  if (!trimmed) return false;
+  if (trimmed.split(/\s+/).length > 8) return false;
+  return SKIP_PHRASE_RE.test(trimmed);
+}
 
 let entryIdCounter = 0;
 function generateEntryId(): string {
@@ -375,7 +387,7 @@ export function VoiceExperience({
 
         if (!transcript.trim()) continue; // genuine silence — repeat the question
 
-        if (SKIP_INTENT_RE.test(transcript.trim())) {
+        if (isSkipCommand(transcript)) {
           if (!q.required) {
             await speak("No problem, skipping that one.");
             return null; // leave unanswered, same as any other gap

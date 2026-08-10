@@ -19,12 +19,6 @@ export function findQuestion(
   return getAllQuestions(form).find((q) => q.fieldName === fieldName);
 }
 
-export function fieldLabel(form: FormDefinition, fieldName: string): string {
-  const q = findQuestion(form, fieldName);
-  if (q) return q.questionText.replace(/\?$/, "");
-  return shortLabel(fieldName);
-}
-
 /** Short, title-cased label derived from a fieldName — used for compact contexts like table headers. */
 export function shortLabel(fieldName: string): string {
   return fieldName

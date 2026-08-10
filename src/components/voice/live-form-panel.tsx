@@ -41,14 +41,14 @@ export function LiveFormPanel({
   const version = form.versions.find((v) => v.version === form.currentVersion);
 
   return (
-    <div className="flex flex-col gap-7">
+    <div className="flex flex-col divide-y divide-border/60">
       {version?.sections.map((section) => {
         const visibleQuestions = section.questions.filter((q) =>
           isVisible(q, answers)
         );
         if (visibleQuestions.length === 0) return null;
         return (
-          <div key={section.id}>
+          <div key={section.id} className="py-5 first:pt-0 last:pb-0">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {section.title}
             </h3>

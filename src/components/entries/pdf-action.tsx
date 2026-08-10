@@ -4,6 +4,7 @@ import { Loader2, Download, RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEntryPdf } from "@/hooks/use-entry-pdf";
+import { cn } from "@/lib/utils";
 import type { Entry, FormDefinition, PdfStatus } from "@/types";
 
 export function PdfAction({
@@ -26,14 +27,62 @@ export function PdfAction({
   // document just shows up — no manual "Generate" step anywhere.
   const pdfState = useEntryPdf(entry, form, status, { auto: variant === "detail" && !disabledReason });
 
-  if (disabledReason && pdfState.status !== "generated") {
-    if (variant === "detail") {
-      return (
-        <div className="flex aspect-[3/4] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-muted px-4 text-center text-xs text-muted-foreground">
-          {disabledReason}
+  if (variant === "detail") {
+    const canRegenerate = !disabledReason;
+    return (
+      <>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-[15px] font-semibold text-foreground">PDF Document</h2>
+          {canRegenerate && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Regenerate PDF"
+                  className="rounded-full text-muted-foreground"
+                  disabled={pdfState.status === "generating"}
+                  onClick={() => pdfState.generate()}
+                >
+                  <RefreshCw
+                    className={cn("size-3.5", pdfState.status === "generating" && "animate-spin")}
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Regenerate PDF</TooltipContent>
+            </Tooltip>
+          )}
         </div>
-      );
-    }
+
+        {disabledReason ? (
+          <div className="flex aspect-[3/4] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-muted px-4 text-center text-xs text-muted-foreground">
+            {disabledReason}
+          </div>
+        ) : pdfState.error ? (
+          <div className="flex aspect-[3/4] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-destructive/30 bg-destructive/5 px-4 text-center text-xs text-destructive">
+            <AlertTriangle className="size-5" />
+            {pdfState.error}
+          </div>
+        ) : pdfState.status === "generated" && pdfState.url ? (
+          // No separate Download button — the browser's built-in PDF
+          // viewer already has one, right there in the frame it's showing.
+          <iframe
+            src={pdfState.url}
+            title={`${entry.id} document`}
+            className="aspect-[3/4] w-full rounded-xl border border-border/60 bg-background"
+          />
+        ) : (
+          <div className="flex aspect-[3/4] items-center justify-center rounded-xl bg-muted text-muted-foreground">
+            <Loader2 className="size-6 animate-spin" />
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // Compact (table row): a single Download icon — clicking it generates the
+  // PDF first if it isn't cached yet, transparently, no separate step.
+  if (disabledReason) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -59,7 +108,7 @@ export function PdfAction({
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
-            size={variant === "detail" ? "sm" : "icon-sm"}
+            size="icon-sm"
             variant="ghost"
             aria-label="Retry generating PDF"
             className="rounded-full text-destructive"
@@ -69,7 +118,6 @@ export function PdfAction({
             }}
           >
             <AlertTriangle className="size-3.5" />
-            {variant === "detail" && "Retry"}
           </Button>
         </TooltipTrigger>
         <TooltipContent>{pdfState.error} — click to retry</TooltipContent>
@@ -77,45 +125,6 @@ export function PdfAction({
     );
   }
 
-  if (variant === "detail") {
-    return (
-      <div className="flex flex-col gap-3">
-        {pdfState.status === "generated" && pdfState.url ? (
-          <iframe
-            src={pdfState.url}
-            title={`${entry.id} document`}
-            className="aspect-[3/4] w-full rounded-xl border border-border/60 bg-background"
-          />
-        ) : (
-          <div className="flex aspect-[3/4] items-center justify-center rounded-xl bg-muted text-muted-foreground">
-            <Loader2 className="size-6 animate-spin" />
-          </div>
-        )}
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            className="flex-1 rounded-full text-xs"
-            disabled={pdfState.status !== "generated"}
-            onClick={() => pdfState.download()}
-          >
-            <Download className="size-3.5" />
-            Download
-          </Button>
-          <Button
-            variant="ghost"
-            className="rounded-full text-xs text-muted-foreground"
-            onClick={() => pdfState.generate()}
-          >
-            <RefreshCw className="size-3.5" />
-            Regenerate
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // Compact (table row): a single Download icon — clicking it generates the
-  // PDF first if it isn't cached yet, transparently, no separate step.
   return (
     <Tooltip>
       <TooltipTrigger asChild>

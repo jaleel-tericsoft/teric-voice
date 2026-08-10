@@ -19,7 +19,7 @@ import { ResendEmailButton } from "@/components/entries/resend-email-button";
 import { VoiceSessionPanel } from "@/components/entries/voice-session-panel";
 import { useEntriesStore } from "@/lib/entries-store";
 import { useFormsStore } from "@/lib/forms-store";
-import { fieldLabel, formatAnswerValue, isEntryComplete } from "@/lib/form-utils";
+import { formatAnswerValue, isEntryComplete } from "@/lib/form-utils";
 import { formatDateTime } from "@/lib/format";
 import type { AuditEvent } from "@/types";
 
@@ -116,10 +116,10 @@ export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) 
 
           {/* Form data grouped by section */}
           <div className="rounded-2xl border border-border/60 bg-card p-5">
-            <h2 className="mb-4 text-[15px] font-semibold text-foreground">
+            <h2 className="mb-1 text-[15px] font-semibold text-foreground">
               Form Data
             </h2>
-            <div className="flex flex-col gap-6">
+            <div className="flex flex-col divide-y divide-border/60">
               {version?.sections.map((section) => {
                 const sectionAnswers = section.questions
                   .map((q) =>
@@ -128,7 +128,7 @@ export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) 
                   .filter(Boolean);
                 if (sectionAnswers.length === 0) return null;
                 return (
-                  <div key={section.id}>
+                  <div key={section.id} className="py-4 first:pt-3 last:pb-0">
                     <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       {section.title}
                     </h3>
@@ -141,7 +141,7 @@ export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) 
                         return (
                           <div key={q.id}>
                             <div className="text-xs text-muted-foreground">
-                              {fieldLabel(form!, q.fieldName)}
+                              {q.questionText}
                             </div>
                             <div className="text-sm font-medium text-foreground">
                               {formatAnswerValue(form!, answer)}
@@ -172,7 +172,7 @@ export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) 
               Audit History
             </h2>
             <div className="flex flex-col">
-              {entry.audit.map((event, idx) => (
+              {[...entry.audit].reverse().map((event, idx) => (
                 <div key={event.id} className="flex gap-3">
                   <div className="flex flex-col items-center">
                     <span className="size-2 shrink-0 rounded-full bg-lime" />
@@ -205,9 +205,6 @@ export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) 
         {/* Right: Document + Email */}
         <div className="flex flex-col gap-5">
           <div className="rounded-2xl border border-border/60 bg-card p-5">
-            <h2 className="mb-4 text-[15px] font-semibold text-foreground">
-              Document
-            </h2>
             <PdfAction
               status={entry.pdf.status}
               entry={entry}

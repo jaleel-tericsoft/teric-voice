@@ -924,17 +924,6 @@ export function VoiceExperience({
               >
                 <X className="size-[18px]" />
               </button>
-              {answeredCount > 0 && (
-                <button
-                  onClick={handleSaveDraft}
-                  className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-white/20"
-                  aria-label="Save as draft and exit"
-                  title="Save what's been answered so far and continue later"
-                >
-                  <Save className="size-[15px]" />
-                  Save Draft
-                </button>
-              )}
               <button
                 onClick={() => setPaused((p) => !p)}
                 className={cn(
@@ -1037,20 +1026,34 @@ export function VoiceExperience({
             <p className="text-xs text-muted-foreground">
               You can edit any field manually, or just say "submit" when ready.
             </p>
-            <Button
-              disabled={phase !== "review"}
-              onClick={handleSubmit}
-              className="rounded-full bg-teal text-teal-foreground hover:bg-[#18464d]"
-            >
-              {phase === "submitting" ? (
-                "Submitting…"
-              ) : (
-                <>
-                  <CheckCheck className="size-4" />
-                  Confirm &amp; Submit
-                </>
+            <div className="flex items-center gap-2">
+              {answeredCount > 0 && (
+                <Button
+                  variant="secondary"
+                  disabled={phase === "submitting"}
+                  onClick={handleSaveDraft}
+                  className="rounded-full"
+                  title="Save what's been answered so far and continue later"
+                >
+                  <Save className="size-4" />
+                  Save Draft
+                </Button>
               )}
-            </Button>
+              <Button
+                disabled={phase !== "review"}
+                onClick={handleSubmit}
+                className="rounded-full bg-teal text-teal-foreground hover:bg-[#18464d]"
+              >
+                {phase === "submitting" ? (
+                  "Submitting…"
+                ) : (
+                  <>
+                    <CheckCheck className="size-4" />
+                    Confirm &amp; Submit
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </div>
       </div>

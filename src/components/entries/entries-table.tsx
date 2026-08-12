@@ -514,7 +514,7 @@ export function EntriesTable({
                     </Button>
                   ) : (
                     <div className="flex items-center justify-end gap-1">
-                      <ResendEmailIconButton entry={entry.id} />
+                      <ResendEmailIconButton entry={entry} />
                       <PdfAction
                         status={entry.pdf.status}
                         entry={entry}

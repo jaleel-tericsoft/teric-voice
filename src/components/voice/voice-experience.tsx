@@ -33,6 +33,7 @@ import { getAllQuestions, findQuestion } from "@/lib/form-utils";
 import { getVoiceGender, setVoiceGender, type VoiceGender } from "@/lib/voice-client";
 import { buildAgentPrompt, buildFirstMessage } from "@/lib/voice-agent-prompt";
 import { getAssistantName, getDailyOpeningQuote } from "@/lib/voice-session-opening";
+import { unlockAudioPlayback } from "@/lib/audio-unlock";
 import { validateAnswer, canSkip } from "@/lib/voice-agent-validate";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
@@ -136,19 +137,6 @@ function describeAnswerValue(q: FormQuestion, value: string | boolean): string {
       .join(", ");
   }
   return String(value);
-}
-
-/** Chrome/Safari block audio.play() without a real click preceding it —
- * calling this from inside the "Start" button's onClick unlocks autoplay
- * for the rest of the tab, so the agent's TTS playback isn't silently
- * blocked (which otherwise looks exactly like "it isn't saying anything"). */
-function unlockAudioPlayback() {
-  try {
-    const a = new Audio();
-    a.play().catch(() => {});
-  } catch {
-    // ignore — best-effort unlock
-  }
 }
 
 /** useConversation() needs a ConversationProvider ancestor — colocated here

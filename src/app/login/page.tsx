@@ -7,6 +7,7 @@ import { Mic, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { unlockAudioPlayback } from "@/lib/audio-unlock";
 
 export default function LoginPage() {
   return (
@@ -28,6 +29,11 @@ function LoginPageContent() {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
+    // A real click, right here — the one and only gesture the ambient
+    // widget gets to piggyback on. It auto-connects and speaks right after
+    // this redirect with no click of its own, so without this the browser
+    // would silently block its very first line.
+    unlockAudioPlayback();
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",

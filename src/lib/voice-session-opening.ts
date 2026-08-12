@@ -19,6 +19,16 @@ export function getAssistantName(gender: VoiceGender): string {
   return ASSISTANT_NAMES[gender];
 }
 
+/** "Good morning" / "Good afternoon" / "Good evening" off the local clock
+ * — used to open every voice session (form-filling or ambient) instead of
+ * a flat, time-blind "Hi there". */
+export function timeOfDayGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
 const MOTIVATIONAL_QUOTES = [
   "Small steps, done consistently, add up to something big.",
   "You don't have to see the whole staircase, just the next step.",

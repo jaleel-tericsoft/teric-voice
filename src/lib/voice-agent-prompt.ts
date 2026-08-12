@@ -13,6 +13,7 @@
 // switch_voice) it always sees regardless of overrides.
 
 import { getAllQuestions } from "@/lib/form-utils";
+import { timeOfDayGreeting } from "@/lib/voice-session-opening";
 import type { AnswerMap } from "@/components/voice/live-form-panel";
 import type { FormDefinition, FormQuestion } from "@/types";
 
@@ -48,15 +49,6 @@ function fieldTypeInstructions(q: FormQuestion): string {
     default:
       return "Type: free text. Send the cleaned-up text of what the user said.";
   }
-}
-
-/** "Good morning" / "Good afternoon" / "Good evening" off the local clock —
- * used to open every session instead of a flat, time-blind "Hi there". */
-function timeOfDayGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
 }
 
 /** Builds the full session prompt. `answers` (already-captured values, e.g.

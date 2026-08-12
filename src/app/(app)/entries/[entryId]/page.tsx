@@ -17,7 +17,7 @@ import { EntryStatusBadge, EmailStatusBadge } from "@/components/entries/status-
 import { PdfAction } from "@/components/entries/pdf-action";
 import { ResendEmailButton } from "@/components/entries/resend-email-button";
 import { VoiceSessionPanel } from "@/components/entries/voice-session-panel";
-import { useEntriesStore } from "@/lib/entries-store";
+import { useEntriesStore, resolveRecipientEmail } from "@/lib/entries-store";
 import { useFormsStore } from "@/lib/forms-store";
 import { formatAnswerValue, isEntryComplete } from "@/lib/form-utils";
 import { formatDateTime } from "@/lib/format";
@@ -223,7 +223,7 @@ export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) 
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Recipient</span>
                 <span className="font-medium text-foreground">
-                  {entry.email.recipient || "—"}
+                  {resolveRecipientEmail(entry) || "—"}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -243,8 +243,8 @@ export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) 
                   {entry.email.failedReason}
                 </p>
               )}
-              {entry.email.status === "failed" && (
-                <ResendEmailButton />
+              {(entry.email.status === "failed" || entry.email.status === "not_sent") && (
+                <ResendEmailButton entry={entry} />
               )}
             </div>
           </div>

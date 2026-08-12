@@ -1,5 +1,6 @@
 import { Sidebar } from "@/components/layout/sidebar";
 import { IdleLogoutBanner } from "@/components/layout/idle-logout-banner";
+import { AmbientVoiceWidget } from "@/components/layout/ambient-voice-widget";
 
 export default function AppLayout({
   children,
@@ -18,6 +19,11 @@ export default function AppLayout({
        * shouldn't stay signed in indefinitely. Not mounted on
        * /voice/[entryId], which sits outside this layout entirely. */}
       <IdleLogoutBanner />
+      {/* Always-on ambient assistant — present on every authenticated page,
+       * distinct from the form-filling agent that takes over once a voice
+       * session actually starts on /voice/[entryId] (outside this layout,
+       * so the two never run at once). */}
+      <AmbientVoiceWidget />
     </div>
   );
 }

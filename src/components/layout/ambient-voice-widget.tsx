@@ -259,6 +259,13 @@ function AmbientVoiceWidgetInner() {
           tts: { voiceId },
         },
       });
+      // Start muted and let the speaking/listening effect below do the
+      // unmuting once the greeting actually finishes — closes the race
+      // where the agent's own opening line could start playing before
+      // React has even seen the first "speaking" mode update, which is
+      // exactly how this widget was overhearing (and acting on) its own
+      // voice right after connecting.
+      conversation.setMuted(true);
     } catch (err) {
       setConnectError(err instanceof Error ? err.message : String(err));
     }
@@ -296,6 +303,24 @@ function AmbientVoiceWidgetInner() {
     connectAmbientSession(isFormBuilderNew, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFormBuilderNew]);
+
+  // Keeps the mic muted for as long as the assistant is the one talking,
+  // unmuting again the instant it's done — this is what stops the widget
+  // from hearing (and sometimes acting on) its own TTS bleeding back into
+  // an open mic, the same self-triggering that made it look like the app
+  // was "jumping straight to a form" right after login. A manual mute via
+  // the button below wins over this — it won't auto-unmute until the user
+  // taps it back on themselves.
+  const userMutedRef = useRef(false);
+  useEffect(() => {
+    if (conversation.status !== "connected") return;
+    if (conversation.mode === "speaking") {
+      if (!conversation.isMuted) conversation.setMuted(true);
+    } else if (conversation.mode === "listening" && !userMutedRef.current) {
+      if (conversation.isMuted) conversation.setMuted(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation.mode, conversation.status]);
 
   const orbState: OrbState =
     conversation.status === "connecting"
@@ -349,7 +374,11 @@ function AmbientVoiceWidgetInner() {
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={() => conversation.setMuted(!conversation.isMuted)}
+              onClick={() => {
+                const next = !conversation.isMuted;
+                userMutedRef.current = next;
+                conversation.setMuted(next);
+              }}
               aria-label={conversation.isMuted ? "Unmute assistant" : "Mute assistant"}
               className="flex size-7 items-center justify-center rounded-full bg-card text-muted-foreground shadow-sm ring-1 ring-border/60 transition-colors hover:text-foreground"
             >

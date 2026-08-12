@@ -40,3 +40,11 @@ export function buildAmbientFirstMessage(assistantName: string): string {
   const greetingWord = timeOfDayGreeting();
   return `Hi, I'm ${assistantName}. ${quote} ${greetingWord}! I'm right here whenever you need me — just say the word.`;
 }
+
+/** Used only when the widget reconnects back to this agent after a stint
+ * in the form-builder agent — a same-conversation continuation, not a
+ * fresh day-opener, so no name/quote re-introduction (that already
+ * happened once at the real first connect, see buildAmbientFirstMessage). */
+export function buildAmbientResumeMessage(): string {
+  return "Back with you — just say the word if you need anything.";
+}

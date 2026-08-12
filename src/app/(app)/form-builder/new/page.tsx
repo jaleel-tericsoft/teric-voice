@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Plus, Trash2, GripVertical, CheckCheck, Save } from "lucide-react";
@@ -18,8 +18,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useFormsStore } from "@/lib/forms-store";
+import {
+  useFormBuilderDraft,
+  computeAllFields,
+  needsOptions,
+  newQuestion,
+  newSection,
+  slugify,
+  type DraftSection,
+} from "@/lib/form-builder-draft-store";
 import { cn } from "@/lib/utils";
-import type { FieldType, FormDefinition, FormSection, FormStatus } from "@/types";
+import type { FieldType, FormStatus } from "@/types";
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: "short_text", label: "Short Text" },
@@ -33,75 +42,6 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: "multi_select", label: "Multi Select" },
 ];
 
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "") || "field";
-}
-
-let uidCounter = 0;
-function uid(prefix: string) {
-  uidCounter += 1;
-  return `${prefix}_${Date.now()}_${uidCounter}`;
-}
-
-interface DraftQuestion {
-  id: string;
-  questionText: string;
-  fieldType: FieldType;
-  required: boolean;
-  optionsText: string; // comma-separated, used for single/multi select
-  /** Set only when this question came from an existing form being edited —
-   * preserves its real fieldName instead of re-deriving one from the
-   * current question text, which wouldn't necessarily match (a form's
-   * fieldName isn't always just a slug of its question text) and would
-   * silently orphan every existing entry's answer for that field, plus
-   * break the Entry List Columns preselection below. */
-  fieldName?: string;
-}
-
-interface DraftSection {
-  id: string;
-  title: string;
-  questions: DraftQuestion[];
-}
-
-function newQuestion(): DraftQuestion {
-  return { id: uid("q"), questionText: "", fieldType: "short_text", required: true, optionsText: "" };
-}
-
-function newSection(index: number): DraftSection {
-  return { id: uid("s"), title: `Section ${index}`, questions: [newQuestion()] };
-}
-
-function needsOptions(type: FieldType) {
-  return type === "single_select" || type === "multi_select";
-}
-
-/** Reverse of the draft->FormDefinition build below — turns an existing
- * form's latest version back into editable draft state. */
-function sectionsFromForm(form: FormDefinition): DraftSection[] {
-  const latest =
-    form.versions.find((v) => v.version === form.currentVersion) ??
-    form.versions[form.versions.length - 1];
-  if (!latest || latest.sections.length === 0) return [newSection(1)];
-
-  return latest.sections.map((s) => ({
-    id: s.id,
-    title: s.title,
-    questions: s.questions.map((q) => ({
-      id: q.id,
-      questionText: q.questionText,
-      fieldType: q.fieldType,
-      required: q.required,
-      optionsText: q.options?.map((o) => o.label).join(", ") ?? "",
-      fieldName: q.fieldName,
-    })),
-  }));
-}
-
 export default function NewFormPage() {
   return (
     <Suspense fallback={null}>
@@ -112,34 +52,41 @@ export default function NewFormPage() {
 
 function NewFormPageContent() {
   const router = useRouter();
-  const { addForm, updateForm, forms, getFormByFormId } = useFormsStore();
+  const { getFormByFormId } = useFormsStore();
 
   const searchParams = useSearchParams();
   const editFormId = searchParams.get("edit");
-  const editingForm = editFormId ? getFormByFormId(editFormId) : undefined;
-  const isEditing = Boolean(editingForm);
+  const editingFormLookup = editFormId ? getFormByFormId(editFormId) : undefined;
 
-  const [name, setName] = useState(() => editingForm?.name ?? "");
-  const [description, setDescription] = useState(() => editingForm?.description ?? "");
-  const [status, setStatus] = useState<FormStatus>(() => editingForm?.status ?? "draft");
-  const [sections, setSections] = useState<DraftSection[]>(() =>
-    editingForm ? sectionsFromForm(editingForm) : [newSection(1)]
-  );
-  const [entryColumns, setEntryColumns] = useState<string[]>(
-    () => editingForm?.entryListColumns ?? []
-  );
+  const {
+    name,
+    setName,
+    description,
+    setDescription,
+    status,
+    setStatus,
+    sections,
+    setSections,
+    entryColumns,
+    setEntryColumns,
+    isEditing,
+    editingForm,
+    ensureInitialized,
+    save,
+  } = useFormBuilderDraft();
+
+  // Seeds the shared draft the first time this page sees a given target
+  // (a specific form to edit, or a blank "new") — see ensureInitialized's
+  // own comment for why this doesn't just run on every render/mount.
+  useEffect(() => {
+    ensureInitialized(editFormId ?? "new", editingFormLookup);
+  }, [editFormId, editingFormLookup, ensureInitialized]);
 
   // fieldName is preserved from the original question when editing, and
   // only derived fresh from question text for genuinely new questions —
   // keeps the entry-list-column picker (and the final saved form) in sync
   // as the user edits question wording without renaming existing fields.
-  const allFields = useMemo(() => {
-    return sections.flatMap((s) =>
-      s.questions
-        .filter((q) => q.questionText.trim())
-        .map((q) => ({ fieldName: q.fieldName ?? slugify(q.questionText), label: q.questionText }))
-    );
-  }, [sections]);
+  const allFields = useMemo(() => computeAllFields(sections), [sections]);
 
   const questionCount = sections.reduce((sum, s) => sum + s.questions.length, 0);
   const canCreate = name.trim().length > 0 && allFields.length > 0;
@@ -148,7 +95,7 @@ function NewFormPageContent() {
     setSections((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   }
 
-  function updateQuestion(sectionId: string, questionId: string, patch: Partial<DraftQuestion>) {
+  function updateQuestion(sectionId: string, questionId: string, patch: Partial<DraftSection["questions"][number]>) {
     setSections((prev) =>
       prev.map((s) =>
         s.id !== sectionId
@@ -193,83 +140,8 @@ function NewFormPageContent() {
 
   function handleSave() {
     if (!canCreate) return;
-
-    const builtSections: FormSection[] = sections
-      .filter((s) => s.questions.some((q) => q.questionText.trim()))
-      .map((s, si) => ({
-        id: s.id,
-        title: s.title.trim() || `Section ${si + 1}`,
-        order: si + 1,
-        questions: s.questions
-          .filter((q) => q.questionText.trim())
-          .map((q, qi) => ({
-            id: q.id,
-            order: qi + 1,
-            fieldName: q.fieldName ?? slugify(q.questionText),
-            questionText: q.questionText.trim(),
-            fieldType: q.fieldType,
-            required: q.required,
-            options: needsOptions(q.fieldType)
-              ? q.optionsText
-                  .split(",")
-                  .map((o) => o.trim())
-                  .filter(Boolean)
-                  .map((label) => ({ id: uid("opt"), label, value: slugify(label) }))
-              : undefined,
-          })),
-      }));
-
-    const now = new Date().toISOString();
-    const columns = entryColumns.length > 0 ? entryColumns : allFields.slice(0, 4).map((f) => f.fieldName);
-
-    if (editingForm) {
-      // Keep the same id/formId (and version history) — editing a form
-      // shouldn't change its URL or reset its entries. The questions just
-      // become a new version, same convention as the seeded sample forms.
-      const nextVersion = editingForm.currentVersion + 1;
-      updateForm(editingForm.id, {
-        name: name.trim(),
-        description: description.trim(),
-        status,
-        updatedAt: now,
-        entryListColumns: columns,
-        currentVersion: nextVersion,
-        versions: [
-          ...editingForm.versions,
-          { id: uid("fv"), version: nextVersion, publishedAt: now, sections: builtSections },
-        ],
-      });
-      router.push("/form-builder");
-      return;
-    }
-
-    let formIdSlug = slugify(name);
-    if (forms.some((f) => f.formId === formIdSlug)) {
-      formIdSlug = `${formIdSlug}_${Date.now().toString(36)}`;
-    }
-
-    const newForm: FormDefinition = {
-      id: uid("form"),
-      formId: formIdSlug,
-      name: name.trim(),
-      description: description.trim(),
-      status,
-      currentVersion: 1,
-      totalEntries: 0,
-      updatedAt: now,
-      entryListColumns: columns,
-      versions: [
-        {
-          id: uid("fv"),
-          version: 1,
-          publishedAt: now,
-          sections: builtSections,
-        },
-      ],
-    };
-
-    addForm(newForm);
-    router.push("/form-builder");
+    const result = save();
+    if (result.ok) router.push("/form-builder");
   }
 
   return (
@@ -288,7 +160,7 @@ function NewFormPageContent() {
           <p className="text-sm text-muted-foreground">
             {isEditing
               ? "Changes save as a new version of this form."
-              : "Define what your voice assistant should ask, then publish it."}
+              : "Define what your voice assistant should ask, then publish it. Say \"take me to the form builder\" any time to build one hands-free."}
           </p>
         </div>
       </div>

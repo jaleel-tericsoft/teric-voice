@@ -1,14 +1,21 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useConversation, ConversationProvider } from "@elevenlabs/react";
 import { Mic, MicOff } from "lucide-react";
 import { VoiceOrb, type OrbState } from "@/components/voice/voice-orb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getVoiceGender } from "@/lib/voice-client";
 import { getAssistantName } from "@/lib/voice-session-opening";
-import { buildAmbientAgentPrompt, buildAmbientFirstMessage } from "@/lib/ambient-agent-prompt";
+import {
+  buildAmbientAgentPrompt,
+  buildAmbientFirstMessage,
+  buildAmbientResumeMessage,
+} from "@/lib/ambient-agent-prompt";
+import { buildFormBuilderAgentPrompt, buildFormBuilderFirstMessage } from "@/lib/form-builder-agent-prompt";
+import { normalizeFieldType, FIELD_TYPE_HINT } from "@/lib/voice-form-builder-validate";
+import { useFormBuilderDraft, needsOptions } from "@/lib/form-builder-draft-store";
 import { useFormsStore } from "@/lib/forms-store";
 import {
   useEntriesStore,
@@ -30,12 +37,17 @@ const PAGE_ROUTES: Record<string, string> = {
   settings: "/settings",
 };
 
+const FORM_BUILDER_ROUTE = "/form-builder/new";
+
 /** Always-on ambient assistant, present on every authenticated page (see
  * (app)/layout.tsx) — a small floating orb on the right edge of the
  * screen, distinct from the form-filling agent in voice-experience.tsx.
- * Connects to a second ElevenLabs agent (?agent=ambient) with its own,
- * smaller tool set: navigation, starting/building forms, activating/
- * deactivating forms, resending a customer's PDF email, and logout. */
+ * Connects to a second ElevenLabs agent (?agent=ambient) with its own
+ * tool set: navigation, starting/building forms, activating/deactivating
+ * forms, resending a customer's PDF email, and logout. While on
+ * /form-builder/new specifically, it reconnects to a *third* agent
+ * (?agent=form-builder) scoped to voice-driven form building, then
+ * reconnects back the moment the user navigates away. */
 export function AmbientVoiceWidget() {
   return (
     <ConversationProvider>
@@ -46,9 +58,12 @@ export function AmbientVoiceWidget() {
 
 function AmbientVoiceWidgetInner() {
   const router = useRouter();
+  const pathname = usePathname();
   const { forms, setFormStatus } = useFormsStore();
   const { entries, upsertEntry } = useEntriesStore();
+  const draftStore = useFormBuilderDraft();
   const [connectError, setConnectError] = useState<string | null>(null);
+  const isFormBuilderNew = pathname === FORM_BUILDER_ROUTE;
 
   // Client tool closures run inside the SDK's own event handling, not a
   // React render — same stale-closure-avoidance pattern as
@@ -62,6 +77,10 @@ function AmbientVoiceWidgetInner() {
   useEffect(() => {
     entriesRef.current = entries;
   }, [entries]);
+  const draftStoreRef = useRef(draftStore);
+  useEffect(() => {
+    draftStoreRef.current = draftStore;
+  }, [draftStore]);
 
   const conversation = useConversation({
     onError: (message) => {
@@ -69,6 +88,7 @@ function AmbientVoiceWidgetInner() {
       setConnectError(message);
     },
     clientTools: {
+      // --- Ambient-mode tools (agent=ambient) ---
       navigate_to: async (params: { page?: string }) => {
         const key = (params.page ?? "").trim().toLowerCase().replace(/\s+/g, "-");
         const target = PAGE_ROUTES[key];
@@ -100,7 +120,7 @@ function AmbientVoiceWidgetInner() {
         return `Starting ${target.name} now.`;
       },
       start_form_builder: async () => {
-        router.push("/form-builder/new");
+        router.push(FORM_BUILDER_ROUTE);
         return "Opening the form builder.";
       },
       toggle_form_status: async (params: { form_name?: string; status?: string }) => {
@@ -150,17 +170,68 @@ function AmbientVoiceWidgetInner() {
         router.refresh();
         return "Logging out now.";
       },
+
+      // --- Form-builder-mode tools (agent=form-builder, only reachable
+      // while that agent is connected, i.e. on /form-builder/new) ---
+      set_form_name: async (params: { name?: string }) => {
+        if (!params.name?.trim()) return "What should the form be called?";
+        return draftStoreRef.current.setFormNameByVoice(params.name).message;
+      },
+      add_question: async (params: {
+        question_text?: string;
+        field_type?: string;
+        required?: string;
+        options?: string;
+      }) => {
+        if (!params.question_text?.trim()) return "I need the question's text to add it.";
+        const fieldType = normalizeFieldType(params.field_type ?? "");
+        if (!fieldType) {
+          return `That's not a type I recognize — it needs to be one of: ${FIELD_TYPE_HINT}.`;
+        }
+        const required = params.required !== "false";
+        const options = needsOptions(fieldType)
+          ? (params.options ?? "")
+              .split(",")
+              .map((o) => o.trim())
+              .filter(Boolean)
+          : [];
+        if (needsOptions(fieldType) && options.length === 0) {
+          return "That type needs a list of options — what should the choices be?";
+        }
+        return draftStoreRef.current.addQuestionByVoice({
+          questionText: params.question_text,
+          fieldType,
+          required,
+          options,
+        }).message;
+      },
+      remove_question: async (params: { question_text?: string }) => {
+        if (!params.question_text?.trim()) return "Which question should I remove?";
+        return draftStoreRef.current.removeQuestionByVoice(params.question_text).message;
+      },
+      save_form: async (params: { status?: string }) => {
+        const statusOverride =
+          params.status === "active" ? "active" : params.status === "inactive" ? "inactive" : params.status === "draft" ? "draft" : undefined;
+        const result = draftStoreRef.current.save(statusOverride);
+        if (result.ok) router.push("/form-builder");
+        return result.message;
+      },
     },
   });
 
   // A function declaration (not `const`), same reasoning as
-  // voice-experience.tsx's connectSession: it's invoked both from the
-  // auto-connect effect below and directly from the orb's click handler
-  // (the manual-retry path), so it can't live inside just one of them.
-  async function connectAmbientSession() {
+  // voice-experience.tsx's connectSession: it's invoked from the
+  // auto-connect effect, the mode-change effect, and the orb's click
+  // handler (the manual-retry path), so it can't live inside just one.
+  // `builderMode` picks which of the two agents to connect to;
+  // `isReconnect` (a same-conversation continuation, not the very first
+  // connect of the session) picks a short transition line instead of the
+  // full name+quote self-introduction.
+  async function connectAmbientSession(builderMode: boolean, isReconnect: boolean) {
     setConnectError(null);
     try {
-      const res = await fetch("/api/voice/agent-session?agent=ambient");
+      const agentParam = builderMode ? "form-builder" : "ambient";
+      const res = await fetch(`/api/voice/agent-session?agent=${agentParam}`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail || body?.error || "Couldn't start the ambient assistant");
@@ -169,12 +240,20 @@ function AmbientVoiceWidgetInner() {
       const gender = getVoiceGender();
       const assistantName = getAssistantName(gender);
       const voiceId = gender === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
+      const prompt = builderMode
+        ? buildFormBuilderAgentPrompt(assistantName)
+        : buildAmbientAgentPrompt(assistantName, formsRef.current);
+      const firstMessage = builderMode
+        ? buildFormBuilderFirstMessage()
+        : isReconnect
+          ? buildAmbientResumeMessage()
+          : buildAmbientFirstMessage(assistantName);
       await conversation.startSession({
         signedUrl,
         overrides: {
           agent: {
-            prompt: { prompt: buildAmbientAgentPrompt(assistantName, formsRef.current) },
-            firstMessage: buildAmbientFirstMessage(assistantName),
+            prompt: { prompt },
+            firstMessage,
             language: "en",
           },
           tts: { voiceId },
@@ -190,16 +269,33 @@ function AmbientVoiceWidgetInner() {
     // Auto-connects once, the moment this widget first mounts (which,
     // mounted at the (app) layout level, means right after login lands on
     // /dashboard) — no click needed since login's own submit already
-    // unlocked autoplay (see audio-unlock.ts).
+    // unlocked autoplay (see audio-unlock.ts). Picks up whichever agent
+    // matches wherever the user actually landed (e.g. a direct link or
+    // refresh straight into /form-builder/new).
     if (connectedRef.current) return;
     connectedRef.current = true;
-    connectAmbientSession();
+    connectAmbientSession(isFormBuilderNew, false);
 
     return () => {
       conversation.endSession();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reconnects to the other agent the moment the route crosses into or
+  // out of /form-builder/new. The equality check against the previous
+  // value (not just "did this effect run") is what keeps this from
+  // double-firing under React StrictMode's dev-only double-invoke, and
+  // from doing anything at all on the very first render (the mount effect
+  // above already handles that with the correct starting agent).
+  const prevIsFormBuilderRef = useRef(isFormBuilderNew);
+  useEffect(() => {
+    if (prevIsFormBuilderRef.current === isFormBuilderNew) return;
+    prevIsFormBuilderRef.current = isFormBuilderNew;
+    conversation.endSession();
+    connectAmbientSession(isFormBuilderNew, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFormBuilderNew]);
 
   const orbState: OrbState =
     conversation.status === "connecting"
@@ -220,15 +316,17 @@ function AmbientVoiceWidgetInner() {
           ? "Muted"
           : conversation.mode === "speaking"
             ? "Speaking"
-            : "Listening";
+            : isFormBuilderNew
+              ? "Building your form"
+              : "Listening";
 
   function handleOrbClick() {
     // A disconnected/errored widget (mic permission denied, network blip)
     // gets a manual way back in — clicking just re-runs the same connect
-    // logic the mount effect used.
+    // logic for whichever mode applies right now.
     if (conversation.status === "connected") return;
     connectedRef.current = true;
-    connectAmbientSession();
+    connectAmbientSession(isFormBuilderNew, false);
   }
 
   return (

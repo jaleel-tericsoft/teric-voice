@@ -1,20 +1,27 @@
 import { NextResponse } from "next/server";
 
-// Both ElevenLabs agents (the form-filling one and the ambient widget's)
+// All three ElevenLabs agents (form-filling, ambient widget, form builder)
 // require auth (platform_settings.auth.enable_auth), so a bare agent_id is
 // useless to a client on its own — this trades ELEVENLABS_API_KEY
 // (server-only) for a short-lived (15 min) signed WebSocket URL the
 // browser can actually use to start a conversation. Sits behind proxy.ts's
 // login gate like every other /api/voice/* route.
 //
-// ?agent=ambient picks the ambient widget's agent; anything else (or the
-// param omitted) picks the form-filling one, same as before this route
-// grew a second agent to serve.
+// ?agent=ambient picks the ambient widget's agent, ?agent=form-builder
+// picks the voice-driven form builder's agent (the widget reconnects to
+// this one only while on /form-builder/new); anything else (or the param
+// omitted) picks the form-filling one, same as before this route grew
+// extra agents to serve.
+
+const AGENT_ENV_VARS: Record<string, string> = {
+  ambient: "ELEVENLABS_AMBIENT_AGENT_ID",
+  "form-builder": "ELEVENLABS_FORM_BUILDER_AGENT_ID",
+};
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const wantsAmbient = searchParams.get("agent") === "ambient";
-  const envVarName = wantsAmbient ? "ELEVENLABS_AMBIENT_AGENT_ID" : "ELEVENLABS_AGENT_ID";
+  const kind = searchParams.get("agent") ?? "";
+  const envVarName = AGENT_ENV_VARS[kind] ?? "ELEVENLABS_AGENT_ID";
   const agentId = process.env[envVarName];
 
   if (!process.env.ELEVENLABS_API_KEY) {

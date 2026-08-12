@@ -61,6 +61,27 @@ export function validateAnswer(q: FormQuestion, rawValue: string): ValidationRes
       };
     }
 
+    case "multi_select": {
+      const picked = trimmed
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean);
+      const validValues = q.options?.map((o) => o.value) ?? [];
+      const invalid = picked.filter((v) => !validValues.includes(v));
+      if (invalid.length > 0 || picked.length === 0) {
+        const validList = validValues.map((v) => `"${v}"`).join(", ") || "(no options configured)";
+        return {
+          ok: false,
+          reason: `${invalid.length > 0 ? `"${invalid.join('", "')}" isn't/aren't a valid option` : "No valid options were sent"} for this field. Valid values are exactly: ${validList}. Ask the user to clarify which ones they mean, then send the exact comma-separated values again — not the spoken labels.`,
+        };
+      }
+      // De-duped, in the field's own option order — so the recorded value
+      // (and what gets read back to the user) is stable regardless of the
+      // order the model happened to list them in.
+      const ordered = validValues.filter((v) => picked.includes(v));
+      return { ok: true, value: ordered.join(",") };
+    }
+
     case "date": {
       if (!ISO_DATE_RE.test(trimmed) || Number.isNaN(new Date(trimmed).getTime())) {
         return {

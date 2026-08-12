@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { CheckCircle2, Circle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -161,21 +162,65 @@ function FieldControl({
 
   if (question.fieldType === "single_select") {
     return (
-      <Select
-        value={typeof value === "string" ? value : undefined}
-        onValueChange={(v) => onChange(v)}
-      >
-        <SelectTrigger className="h-9 w-full rounded-lg bg-background text-sm">
-          <SelectValue placeholder={placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          {question.options?.map((o) => (
-            <SelectItem key={o.id} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex flex-col gap-1">
+        <Select
+          value={typeof value === "string" ? value : undefined}
+          onValueChange={(v) => onChange(v)}
+        >
+          <SelectTrigger className="h-9 w-full rounded-lg bg-background text-sm">
+            <SelectValue placeholder={placeholder} />
+          </SelectTrigger>
+          <SelectContent>
+            {question.options?.map((o) => (
+              <SelectItem key={o.id} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="text-[10px] text-muted-foreground">Single select — pick one</span>
+      </div>
+    );
+  }
+
+  if (question.fieldType === "multi_select") {
+    // Stored as a comma-joined string in AnswerMap (which only holds
+    // string | boolean) rather than widening that type app-wide for one
+    // field type — same convention the voice agent's record_answer uses.
+    const selected = typeof value === "string" && value ? value.split(",") : [];
+    return (
+      <div className="flex flex-col gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
+          {question.options?.map((o) => {
+            const checked = selected.includes(o.value);
+            return (
+              <label
+                key={o.id}
+                className={cn(
+                  "flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                  checked
+                    ? "border-transparent bg-primary text-primary-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={(next) => {
+                    const nextSelected =
+                      next === true
+                        ? [...selected, o.value]
+                        : selected.filter((v) => v !== o.value);
+                    onChange(nextSelected.join(","));
+                  }}
+                  className="sr-only"
+                />
+                {o.label}
+              </label>
+            );
+          })}
+        </div>
+        <span className="text-[10px] text-muted-foreground">Multi select — pick any that apply</span>
+      </div>
     );
   }
 

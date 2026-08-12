@@ -37,7 +37,7 @@ import { validateAnswer, canSkip } from "@/lib/voice-agent-validate";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
-import type { Entry, EntryAnswer, FormDefinition } from "@/types";
+import type { Entry, EntryAnswer, FormDefinition, FormQuestion } from "@/types";
 
 // ElevenLabs' well-known premade voices — same pair the old plain-TTS route
 // used, now selected client-side via overrides.tts.voiceId per session
@@ -119,6 +119,25 @@ function formatSpokenMessage(text: string): MessageLine[] {
     .map((sentence) => ({ text: sentence, kind: "sentence" as const }));
 }
 
+/** Turns a raw record_answer value into the way it should be spoken back to
+ * the user — a single_select/multi_select's real label(s) rather than its
+ * internal value, "Yes"/"No" for booleans. Used to make the tool's own
+ * response state exactly what was recorded, deterministically, rather than
+ * leaving the agent to remember/restate it from its own context. */
+function describeAnswerValue(q: FormQuestion, value: string | boolean): string {
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (q.fieldType === "single_select") {
+    return q.options?.find((o) => o.value === value)?.label ?? String(value);
+  }
+  if (q.fieldType === "multi_select") {
+    return String(value)
+      .split(",")
+      .map((v) => q.options?.find((o) => o.value === v)?.label ?? v)
+      .join(", ");
+  }
+  return String(value);
+}
+
 /** Chrome/Safari block audio.play() without a real click preceding it —
  * calling this from inside the "Start" button's onClick unlocks autoplay
  * for the rest of the tab, so the agent's TTS playback isn't silently
@@ -188,8 +207,11 @@ function VoiceExperienceInner({
     "conversation"
   );
   const [assistantText, setAssistantText] = useState("");
+  // Which field the agent is currently asking about (set by the
+  // announce_question tool, right before it speaks each question).
+  const [activeField, setActiveField] = useState<string | null>(null);
   // Briefly flashes a field in the form preview when an answer/correction
-  // lands on it.
+  // lands on it — takes priority over activeField while it's showing.
   const [highlightField, setHighlightField] = useState<string | null>(null);
   const [answers, setAnswers] = useState<AnswerMap>(() => {
     if (!resumeEntry) return {};
@@ -259,6 +281,14 @@ function VoiceExperienceInner({
       }
     },
     clientTools: {
+      announce_question: async (params: { field_name?: string }) => {
+        const fieldName = params.field_name;
+        if (!fieldName || !findQuestion(form, fieldName)) {
+          return "Unknown field_name — it must exactly match one of the field names given in your instructions.";
+        }
+        setActiveField(fieldName);
+        return "ok";
+      },
       record_answer: async (params: { field_name?: string; value?: string }) => {
         const fieldName = params.field_name;
         const q = fieldName ? findQuestion(form, fieldName) : undefined;
@@ -268,9 +298,19 @@ function VoiceExperienceInner({
         const result = validateAnswer(q, params.value ?? "");
         markVisited(fieldName);
         if (!result.ok) return result.reason;
+
+        const previousValue = answersRef.current[fieldName];
+        const isCorrection =
+          previousValue !== undefined && previousValue !== "" && previousValue !== result.value;
+
         setAnswers((prev) => ({ ...prev, [fieldName]: result.value }));
         flashHighlight(fieldName);
-        return "Recorded.";
+
+        const spokenValue = describeAnswerValue(q, result.value);
+        if (isCorrection) {
+          return `Updated — changed from "${describeAnswerValue(q, previousValue)}" to "${spokenValue}".`;
+        }
+        return `Recorded: ${spokenValue}.`;
       },
       skip_field: async (params: { field_name?: string }) => {
         const fieldName = params.field_name;
@@ -282,6 +322,21 @@ function VoiceExperienceInner({
         markVisited(fieldName);
         if (!result.ok) return result.reason;
         return "Skipped.";
+      },
+      switch_voice: async (params: { gender?: string }) => {
+        const gender: VoiceGender | null =
+          params.gender === "male" ? "male" : params.gender === "female" ? "female" : null;
+        if (!gender) return 'Unknown gender — must be "male" or "female".';
+        setVoiceGenderState(gender);
+        // Give the current session a moment to actually speak this tool's
+        // return value before endSession/startSession tears it down and
+        // reconnects — there's no live voice-swap primitive in the SDK, a
+        // fresh session with a new overrides.tts.voiceId is the only way.
+        window.setTimeout(() => {
+          conversation.endSession();
+          connectSession(gender);
+        }, 600);
+        return `Switching to a ${gender} voice now.`;
       },
       save_draft_and_exit: async () => {
         saveDraftAndExit(answersRef.current);
@@ -347,9 +402,12 @@ function VoiceExperienceInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleStart() {
-    unlockAudioPlayback();
-    setStarted(true);
+  // A function declaration (not `const`) so it's hoisted — the switch_voice
+  // client tool above references it before this line runs, but by the time
+  // that tool actually gets called (a live tool call, long after this
+  // render finished), the hoisted declaration is fully defined. Also used
+  // directly by handleStart for the initial connection.
+  async function connectSession(voiceGenderOverride?: VoiceGender) {
     try {
       const res = await fetch("/api/voice/agent-session");
       if (!res.ok) {
@@ -357,7 +415,8 @@ function VoiceExperienceInner({
         throw new Error(body?.detail || body?.error || "Couldn't start a voice session");
       }
       const { signedUrl } = await res.json();
-      const voiceId = voiceGenderRef.current === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
+      const voiceId =
+        (voiceGenderOverride ?? voiceGenderRef.current) === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
       await conversation.startSession({
         signedUrl,
         overrides: {
@@ -373,6 +432,12 @@ function VoiceExperienceInner({
       const reason = err instanceof Error ? err.message : String(err);
       setSessionError(`${reason} — you can still fill out the form manually on the right.`);
     }
+  }
+
+  async function handleStart() {
+    unlockAudioPlayback();
+    setStarted(true);
+    await connectSession();
   }
 
   const allQuestions = getAllQuestions(form);
@@ -610,8 +675,8 @@ function VoiceExperienceInner({
             <LiveFormPanel
               form={form}
               answers={answers}
-              activeFieldName={highlightField}
-              activeLabel="updated"
+              activeFieldName={highlightField ?? activeField}
+              activeLabel={highlightField ? "updated" : "listening"}
               onFieldChange={handleManualChange}
             />
           </div>

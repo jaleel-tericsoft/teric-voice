@@ -1,6 +1,6 @@
 // Signs/verifies the app's login-gate session cookie. Deliberately simple —
 // this is one shared password protecting the deployed app from random
-// visitors (and their cost to your OpenAI/ElevenLabs usage), not per-user
+// visitors (and their cost to your ElevenLabs usage), not per-user
 // authentication. Runs in both the login route (Node runtime) and
 // middleware.ts (Edge runtime), so it only uses Web Crypto + plain JS —
 // no Node-only APIs like `Buffer`, which Edge doesn't reliably provide.

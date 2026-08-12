@@ -8,7 +8,6 @@ import {
   Mic,
   MicOff,
   Settings2,
-  Sparkles,
   CheckCheck,
   AlertTriangle,
   Play,
@@ -342,6 +341,14 @@ function VoiceExperienceInner({
         saveDraftAndExit(answersRef.current);
         return "Saved as a draft.";
       },
+      discard_entry: async () => {
+        // Deliberately does NOT call upsertEntry — the whole point is
+        // nothing gets saved, unlike save_draft_and_exit. Avoids leaving
+        // behind a pile of empty/near-empty draft entries from sessions
+        // someone just didn't want to continue.
+        router.push("/entries");
+        return "Discarded.";
+      },
       submit_form: async () => {
         setPhase("submitting");
         const entry = buildEntry({
@@ -482,25 +489,6 @@ function VoiceExperienceInner({
 
   return (
     <div className="flex h-dvh w-full flex-col gap-3 bg-canvas p-3">
-      {/* Top bar */}
-      <div className="flex h-14 shrink-0 items-center justify-between rounded-2xl bg-background px-4">
-        <button
-          onClick={() => router.push("/entries")}
-          className="flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <X className="size-4" />
-          Exit
-        </button>
-        <div className="flex items-center gap-2 text-sm">
-          <Sparkles className="size-4 text-lime" />
-          <span className="font-semibold text-foreground">{form.name}</span>
-          <span className="text-muted-foreground">· Voice Entry</span>
-        </div>
-        <div className="w-24 text-right text-xs text-muted-foreground">
-          {answeredCount}/{visibleCount} answered
-        </div>
-      </div>
-
       {/* Split panels */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         {/* Left: voice panel */}

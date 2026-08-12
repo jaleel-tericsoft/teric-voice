@@ -5,8 +5,8 @@ import { isValidSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth-token";
 // AUTH_PASSWORD) — /login and the auth API routes are the only paths that
 // don't require it. Covers /api/voice/* too, not just the UI pages: the
 // entire point is keeping random visitors off routes that spend your
-// OpenAI/ElevenLabs usage, so a curl straight at the API has to be blocked
-// the same as loading a page in a browser.
+// ElevenLabs usage, so a curl straight at the API has to be blocked the
+// same as loading a page in a browser.
 //
 // Named `proxy` (not `middleware`) per this Next.js version — the
 // middleware.ts convention is deprecated in favor of proxy.ts, and it now

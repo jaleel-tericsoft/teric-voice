@@ -8,9 +8,9 @@
 // This is what stands in for the old interpretAnswer/interpretReviewCommand
 // OpenAI calls and the hand-written askQuestion() state machine — the
 // agent's own model now does that reasoning live, guided by this prompt
-// plus the six tool descriptions (record_answer, skip_field,
-// save_draft_and_exit, submit_form, announce_question, switch_voice) it
-// always sees regardless of overrides.
+// plus the seven tool descriptions (record_answer, skip_field,
+// save_draft_and_exit, discard_entry, submit_form, announce_question,
+// switch_voice) it always sees regardless of overrides.
 
 import { getAllQuestions } from "@/lib/form-utils";
 import type { AnswerMap } from "@/components/voice/live-form-panel";
@@ -113,8 +113,10 @@ GENERAL RULES:
 - If the user asks you to repeat or re-read a question (current or already-asked), just say it again yourself from the list below (calling announce_question first, per the rule above), including its options if it's a choice question.
 - If the user explicitly asks to skip the current question, call skip_field. If it reports the field is required, explain that warmly and ask it again rather than moving on.
 - If the user asks to switch your voice (e.g. "can you use a female voice", "switch to a male voice"), call switch_voice with "male" or "female". This reconnects, so say something brief first like "Sure, one moment" before calling it.
-- If the user indicates at any point they need to stop and leave right now (an emergency, they're busy, anything urgent), call save_draft_and_exit immediately without asking anything else, then say one short reassuring sentence confirming it's saved as a draft, and stop.
-- If the user goes quiet after you ask something, check in once, gently ("Are you still there?"). If there's still no response after that, warn them politely that you'll save their progress as a draft and end the session if you don't hear back soon. If there's still no response after that warning, call save_draft_and_exit rather than waiting indefinitely — don't just keep repeating the question forever.
+- Two different tools for two different ways someone wants to stop, don't mix them up:
+  - If the user needs to step away but plans to come back and finish (an emergency, they're busy, anything urgent, "let me finish this later"), call save_draft_and_exit immediately without asking anything else, then say one short reassuring sentence confirming their answers are saved as a draft, and stop.
+  - If the user simply doesn't want to fill this out right now and gives no sign they'll be back soon ("never mind", "cancel this", "I don't want to do this", "not in the mood"), call discard_entry instead — nothing gets saved. Say one short warm sentence confirming it's been discarded and they can always start again whenever they're ready, then stop.
+- If the user goes quiet after you ask something, check in once, gently ("Are you still there?"). If there's still no response after that, warn them politely that you'll save their progress as a draft and end the session if you don't hear back soon. If there's still no response after that warning, call save_draft_and_exit rather than waiting indefinitely — don't just keep repeating the question forever — and close with a warm sign-off (e.g. "...saved as a draft. Have a great rest of your day!") rather than a bare confirmation.
 - Once every question below has been asked (or skipped/left optional), read back a brief natural-language summary of the answers given so far and ask the user to confirm. Only call submit_form after they explicitly confirm it's correct — never call it mid-conversation.
 
 QUESTIONS, IN ORDER:
@@ -122,9 +124,12 @@ QUESTIONS, IN ORDER:
 ${questionBlocks || "(Every question has already been answered — go straight to summarizing and asking the user to confirm submission.)"}`;
 }
 
-/** The agent's opening line for a session — a time-of-day greeting plus the
- * very first question, so there's no dead air waiting for a generic hello
- * before anything useful happens. */
+/** The agent's opening line for a session: a time-of-day greeting and
+ * well-wish, then (for a fresh session) a one-line heads-up on what's about
+ * to happen, then straight into the first question — no dead air waiting
+ * for a generic hello before anything useful happens. Fully authored here
+ * rather than left to the agent's own improvisation, same reasoning as the
+ * rest of this function: deterministic beats "probably fine". */
 export function buildFirstMessage(form: FormDefinition, answers: AnswerMap = {}): string {
   const next = getAllQuestions(form).find((q) => {
     const value = answers[q.fieldName];
@@ -136,11 +141,11 @@ export function buildFirstMessage(form: FormDefinition, answers: AnswerMap = {})
   });
   const greetingWord = timeOfDayGreeting();
   if (!next) {
-    return `${greetingWord} — welcome back. Looks like everything's already answered, so let's go over it together before you submit.`;
+    return `${greetingWord}, and welcome back — hope you're doing well! Looks like everything's already answered, so let's go over it together before you submit.`;
   }
   const intro =
     Object.keys(answers).length > 0
-      ? `${greetingWord}, welcome back! Let's pick up where we left off.`
-      : `${greetingWord}!`;
+      ? `${greetingWord}, welcome back! Hope you're doing well. Let's pick up right where we left off.`
+      : `${greetingWord}! Hope you're doing well today. I'll be asking you a few quick questions to fill out the form — just answer each one as we go.`;
   return `${intro} ${next.questionText}`;
 }

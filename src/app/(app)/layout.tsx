@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/layout/sidebar";
+import { IdleLogoutBanner } from "@/components/layout/idle-logout-banner";
 
 export default function AppLayout({
   children,
@@ -13,6 +14,10 @@ export default function AppLayout({
           {children}
         </div>
       </main>
+      {/* Idle auto-logout — a device left running (glasses/wearable use)
+       * shouldn't stay signed in indefinitely. Not mounted on
+       * /voice/[entryId], which sits outside this layout entirely. */}
+      <IdleLogoutBanner />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, Mic, Mail, FileText } from "lucide-react";
+import { Building2, Mic, Mail, FileText, ShieldCheck } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,12 +16,19 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { organization } from "@/lib/mock-data";
+import {
+  IDLE_TIMEOUT_OPTIONS_MINUTES,
+  getIdleTimeoutMinutes,
+  setIdleTimeoutMinutes,
+  type IdleTimeoutMinutes,
+} from "@/lib/use-idle-logout";
 
 const sections = [
   { id: "general", label: "General", icon: Building2 },
   { id: "voice", label: "Voice & AI", icon: Mic },
   { id: "email", label: "Email", icon: Mail },
   { id: "pdf", label: "PDF", icon: FileText },
+  { id: "security", label: "Security", icon: ShieldCheck },
 ] as const;
 
 type SectionId = (typeof sections)[number]["id"];
@@ -68,6 +75,7 @@ export default function SettingsPage() {
           {active === "voice" && <VoiceSection />}
           {active === "email" && <EmailSection />}
           {active === "pdf" && <PdfSection />}
+          {active === "security" && <SecuritySection />}
         </div>
       </div>
     </div>
@@ -249,6 +257,46 @@ function PdfSection() {
         </div>
       </div>
       <SaveBar />
+    </div>
+  );
+}
+
+function SecuritySection() {
+  // Reads straight from localStorage on mount rather than a store — this
+  // is a lone client-only preference, same convention as voice gender,
+  // and the idle-logout hook reads the exact same key independently.
+  const [minutes, setMinutes] = useState<IdleTimeoutMinutes>(() => getIdleTimeoutMinutes());
+
+  return (
+    <div>
+      <SectionHeader
+        title="Security"
+        description="Session behavior for shared or wearable devices."
+      />
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <Field label="Auto-logout after inactivity">
+          <Select
+            value={String(minutes)}
+            onValueChange={(v) => setMinutes(Number(v) as IdleTimeoutMinutes)}
+          >
+            <SelectTrigger className="w-full rounded-xl">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {IDLE_TIMEOUT_OPTIONS_MINUTES.map((m) => (
+                <SelectItem key={m} value={String(m)}>
+                  {m} {m === 1 ? "minute" : "minutes"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+      <div className="mt-8 flex justify-end border-t border-border/60 pt-5">
+        <Button className="rounded-full" onClick={() => setIdleTimeoutMinutes(minutes)}>
+          Save Changes
+        </Button>
+      </div>
     </div>
   );
 }

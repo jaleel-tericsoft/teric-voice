@@ -61,8 +61,15 @@ function timeOfDayGreeting(): string {
 
 /** Builds the full session prompt. `answers` (already-captured values, e.g.
  * from a resumed draft) are excluded from the question list entirely — the
- * agent should never re-ask something already on record. */
-export function buildAgentPrompt(form: FormDefinition, answers: AnswerMap = {}): string {
+ * agent should never re-ask something already on record. `assistantName`
+ * is whichever persona (Ava/Leo) is currently speaking — named in the
+ * prompt too, not just the opening line, so the agent answers consistently
+ * if asked "what's your name?" mid-conversation. */
+export function buildAgentPrompt(
+  form: FormDefinition,
+  answers: AnswerMap = {},
+  assistantName = "Ava"
+): string {
   const questions = getAllQuestions(form).filter((q) => {
     const value = answers[q.fieldName];
     return value === undefined || value === "";
@@ -96,11 +103,12 @@ export function buildAgentPrompt(form: FormDefinition, answers: AnswerMap = {}):
   });
   const todayIso = today.toISOString().slice(0, 10);
 
-  return `You are a warm, polite, friendly voice assistant filling out the "${form.name}" form by asking the questions below, one at a time, and listening to the user's spoken answers.
+  return `You are ${assistantName}, a warm, polite, friendly voice assistant filling out the "${form.name}" form by asking the questions below, one at a time, and listening to the user's spoken answers.
 
 Today's date is ${todayLabel} (${todayIso}) — use this as your anchor whenever a date question gets a relative answer like "yesterday", "two days ago", "last Monday", or "next Friday".
 
 GENERAL RULES:
+- Always sound warm, patient, and genuinely helpful — like a friendly colleague, never commanding, demanding, or urgent. This applies everywhere, especially the silence check-ins below: gentle and unhurried, never a raised-voice "ARE YOU STILL THERE?".
 - Ask only one question at a time, then wait for the answer. Never ask two questions in the same turn, never read the whole list out loud.
 - Keep your own turns short and natural — this is a conversation, not a script being read. Never shout or sound robotic; keep the mood friendly throughout.
 - The instant you start asking (or re-asking) one of the questions below, call announce_question with its field_name first — before you speak the question — so the UI can highlight the right field. Every question gets this call, including retries and re-asks, not just the first attempt.
@@ -116,7 +124,13 @@ GENERAL RULES:
 - Two different tools for two different ways someone wants to stop, don't mix them up:
   - If the user needs to step away but plans to come back and finish (an emergency, they're busy, anything urgent, "let me finish this later"), call save_draft_and_exit immediately without asking anything else, then say one short reassuring sentence confirming their answers are saved as a draft, and stop.
   - If the user simply doesn't want to fill this out right now and gives no sign they'll be back soon ("never mind", "cancel this", "I don't want to do this", "not in the mood"), call discard_entry instead — nothing gets saved. Say one short warm sentence confirming it's been discarded and they can always start again whenever they're ready, then stop.
-- If the user goes quiet after you ask something, check in once, gently ("Are you still there?"). If there's still no response after that, warn them politely that you'll save their progress as a draft and end the session if you don't hear back soon. If there's still no response after that warning, call save_draft_and_exit rather than waiting indefinitely — don't just keep repeating the question forever — and close with a warm sign-off (e.g. "...saved as a draft. Have a great rest of your day!") rather than a bare confirmation.
+- If the user goes quiet after you ask something, don't say anything for at least 10 full seconds of real silence — give them a real moment before assuming they've gone somewhere. Then check in once, warmly and unhurried, never urgent (e.g. "No rush at all — just checking, are you still there?").
+- If there's still no response after that first check-in, check in a second time, just as gentle, and this time tell them plainly what happens next so nothing feels sudden: name the actual outcome that applies (see below), and say you'll wait 30 seconds for them before doing it. For example, if at least one answer is already recorded this session: "Take your time, I'm still here — but if I don't hear back in the next 30 seconds, I'll go ahead and save what we have so far as a draft, so you can pick it back up whenever suits." If nothing at all has been recorded yet this session: "...but if I don't hear back in the next 30 seconds, I'll close this out without saving anything, since we haven't got started yet — you can always come back and begin fresh."
+- Then actually wait up to 30 seconds. The instant the user responds at any point in this whole sequence, drop it completely and continue the conversation normally — never mention the timer again once they're back.
+- If the full 30 seconds passes with still no response:
+  - If at least one answer has been recorded this session, call save_draft_and_exit, then close with a warm sign-off matching what you already told them (e.g. "All saved as a draft — have a great rest of your day!"), not a bare confirmation.
+  - If nothing has been recorded at all this session, call discard_entry instead, and close warmly, confirming nothing was saved and they're welcome to start again whenever they're ready.
+- Never repeat the question itself as part of this sequence — the two check-ins above are the only things you say while waiting.
 - Once every question below has been asked (or skipped/left optional), read back a brief natural-language summary of the answers given so far and ask the user to confirm. Only call submit_form after they explicitly confirm it's correct — never call it mid-conversation.
 
 QUESTIONS, IN ORDER:
@@ -124,13 +138,19 @@ QUESTIONS, IN ORDER:
 ${questionBlocks || "(Every question has already been answered — go straight to summarizing and asking the user to confirm submission.)"}`;
 }
 
-/** The agent's opening line for a session: a time-of-day greeting and
- * well-wish, then (for a fresh session) a one-line heads-up on what's about
- * to happen, then straight into the first question — no dead air waiting
- * for a generic hello before anything useful happens. Fully authored here
+/** The agent's opening line for a session: a self-introduction plus a
+ * fresh quote (motivational, on the very first session of the day —
+ * see getDailyOpeningQuote), then a time-of-day greeting and well-wish,
+ * then (for a fresh session) a one-line heads-up on what's about to
+ * happen, then straight into the first question — no dead air waiting for
+ * a generic hello before anything useful happens. Fully authored here
  * rather than left to the agent's own improvisation, same reasoning as the
  * rest of this function: deterministic beats "probably fine". */
-export function buildFirstMessage(form: FormDefinition, answers: AnswerMap = {}): string {
+export function buildFirstMessage(
+  form: FormDefinition,
+  answers: AnswerMap = {},
+  opening: { assistantName: string; quote: string } = { assistantName: "Ava", quote: "" }
+): string {
   const next = getAllQuestions(form).find((q) => {
     const value = answers[q.fieldName];
     if (value !== undefined && value !== "") return false;
@@ -140,12 +160,13 @@ export function buildFirstMessage(form: FormDefinition, answers: AnswerMap = {})
     return true;
   });
   const greetingWord = timeOfDayGreeting();
+  const selfIntro = `Hi, I'm ${opening.assistantName}. ${opening.quote}`.trim();
   if (!next) {
-    return `${greetingWord}, and welcome back — hope you're doing well! Looks like everything's already answered, so let's go over it together before you submit.`;
+    return `${selfIntro} ${greetingWord}, and welcome back — hope you're doing well! Looks like everything's already answered, so let's go over it together before you submit.`;
   }
   const intro =
     Object.keys(answers).length > 0
-      ? `${greetingWord}, welcome back! Hope you're doing well. Let's pick up right where we left off.`
-      : `${greetingWord}! Hope you're doing well today. I'll be asking you a few quick questions to fill out the form — just answer each one as we go.`;
+      ? `${selfIntro} ${greetingWord}, welcome back! Hope you're doing well. Let's pick up right where we left off.`
+      : `${selfIntro} ${greetingWord}! Hope you're doing well today. I'll be asking you a few quick questions to fill out the form — just answer each one as we go.`;
   return `${intro} ${next.questionText}`;
 }

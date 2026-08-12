@@ -32,6 +32,7 @@ import {
 import { getAllQuestions, findQuestion } from "@/lib/form-utils";
 import { getVoiceGender, setVoiceGender, type VoiceGender } from "@/lib/voice-client";
 import { buildAgentPrompt, buildFirstMessage } from "@/lib/voice-agent-prompt";
+import { getAssistantName, getDailyOpeningQuote } from "@/lib/voice-session-opening";
 import { validateAnswer, canSkip } from "@/lib/voice-agent-validate";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
@@ -245,6 +246,12 @@ function VoiceExperienceInner({
     setVoiceGender(voiceGender);
   }, [voiceGender]);
 
+  // The day's opening quote is picked once per session (first connect),
+  // not re-rolled on a switch_voice reconnect — only the assistant's name
+  // should change when the voice switches, not the quote it already
+  // opened with a moment ago.
+  const dailyOpeningRef = useRef<ReturnType<typeof getDailyOpeningQuote> | null>(null);
+
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashHighlight = useCallback((fieldName: string) => {
     setHighlightField(fieldName);
@@ -422,14 +429,19 @@ function VoiceExperienceInner({
         throw new Error(body?.detail || body?.error || "Couldn't start a voice session");
       }
       const { signedUrl } = await res.json();
-      const voiceId =
-        (voiceGenderOverride ?? voiceGenderRef.current) === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
+      const gender = voiceGenderOverride ?? voiceGenderRef.current;
+      const voiceId = gender === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
+      const assistantName = getAssistantName(gender);
+      if (!dailyOpeningRef.current) dailyOpeningRef.current = getDailyOpeningQuote();
       await conversation.startSession({
         signedUrl,
         overrides: {
           agent: {
-            prompt: { prompt: buildAgentPrompt(form, answersRef.current) },
-            firstMessage: buildFirstMessage(form, answersRef.current),
+            prompt: { prompt: buildAgentPrompt(form, answersRef.current, assistantName) },
+            firstMessage: buildFirstMessage(form, answersRef.current, {
+              assistantName,
+              quote: dailyOpeningRef.current.quote,
+            }),
             language,
           },
           tts: { voiceId },

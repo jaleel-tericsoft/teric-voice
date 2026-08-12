@@ -18,3 +18,11 @@ export function setVoiceGender(gender: VoiceGender): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(VOICE_GENDER_STORAGE_KEY, gender);
 }
+
+// Shared between voice-experience.tsx's own settings popover and the
+// ambient widget's — one list, so the two can't quietly drift apart.
+export const LANGUAGE_OPTIONS = [
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+] as const;
+export type LanguageCode = (typeof LANGUAGE_OPTIONS)[number]["value"];

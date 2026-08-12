@@ -63,8 +63,6 @@ function NewFormPageContent() {
     setName,
     description,
     setDescription,
-    status,
-    setStatus,
     sections,
     setSections,
     entryColumns,
@@ -138,9 +136,9 @@ function NewFormPageContent() {
     );
   }
 
-  function handleSave() {
+  function handleSave(statusOverride?: FormStatus) {
     if (!canCreate) return;
-    const result = save();
+    const result = save(statusOverride);
     if (result.ok) router.push("/form-builder");
   }
 
@@ -188,23 +186,13 @@ function NewFormPageContent() {
               className="rounded-xl"
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-xs font-medium text-muted-foreground">Status</Label>
-            <Select value={status} onValueChange={(v) => setStatus(v as FormStatus)}>
-              <SelectTrigger className="w-full rounded-xl">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="draft">Draft</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="inactive">Inactive</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-[11px] text-muted-foreground">
-              Only Active forms can be voice-filled. Draft and Inactive both block new entries.
-            </p>
-          </div>
         </div>
+        {isEditing && (
+          <p className="mt-4 text-[11px] text-muted-foreground">
+            Active/inactive is set from the form&apos;s card in Form Builder, not here — only
+            Active forms can be voice-filled.
+          </p>
+        )}
       </div>
 
       {/* Sections & Questions */}
@@ -370,24 +358,36 @@ function NewFormPageContent() {
         </div>
       )}
 
-      {/* Footer actions */}
+      {/* Footer actions — editing an existing form keeps its current
+       * active/inactive/draft status untouched (that's a card-level
+       * concern now); a genuinely new form needs an explicit choice since
+       * it doesn't have a status yet. */}
       <div className="flex items-center justify-end gap-3 border-t border-border/60 pt-5">
         <Button variant="ghost" asChild className="rounded-full">
           <Link href="/form-builder">Cancel</Link>
         </Button>
-        <Button disabled={!canCreate} onClick={handleSave} className="rounded-full">
-          {status === "draft" ? (
-            <>
+        {isEditing ? (
+          <Button disabled={!canCreate} onClick={() => handleSave()} className="rounded-full">
+            <Save className="size-4" />
+            Save Changes
+          </Button>
+        ) : (
+          <>
+            <Button
+              variant="secondary"
+              disabled={!canCreate}
+              onClick={() => handleSave("draft")}
+              className="rounded-full"
+            >
               <Save className="size-4" />
               Save as Draft
-            </>
-          ) : (
-            <>
+            </Button>
+            <Button disabled={!canCreate} onClick={() => handleSave("active")} className="rounded-full">
               <CheckCheck className="size-4" />
-              {isEditing ? "Save & Publish" : "Publish Form"}
-            </>
-          )}
-        </Button>
+              Publish Form
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

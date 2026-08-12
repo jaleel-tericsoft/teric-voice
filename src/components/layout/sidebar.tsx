@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -14,6 +15,15 @@ import {
 import { cn } from "@/lib/utils";
 import { ProfileMenu } from "@/components/layout/profile-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { performLogout } from "@/lib/logout";
 
 const primaryNav = [
@@ -30,6 +40,7 @@ const primaryNav = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
 
   async function handleLogout() {
     await performLogout();
@@ -102,7 +113,10 @@ export function Sidebar() {
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={handleLogout}
+              // Confirm first, same as the ambient widget's voice logout —
+              // a click here shouldn't end the session any more instantly
+              // than a spoken "log me out" does.
+              onClick={() => setConfirmingLogout(true)}
               aria-label="Logout"
               className="flex size-9 shrink-0 items-center justify-center rounded-xl text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
@@ -112,6 +126,26 @@ export function Sidebar() {
           <TooltipContent side="right">Logout</TooltipContent>
         </Tooltip>
       </div>
+
+      <Dialog open={confirmingLogout} onOpenChange={setConfirmingLogout}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Log out?</DialogTitle>
+            <DialogDescription>
+              You&apos;ll need to sign in again to get back to your workspace.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" className="rounded-full" onClick={() => setConfirmingLogout(false)}>
+              Cancel
+            </Button>
+            <Button className="rounded-full" onClick={handleLogout}>
+              <LogOut className="size-4" />
+              Log Out
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

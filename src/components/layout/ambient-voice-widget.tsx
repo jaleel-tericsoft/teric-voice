@@ -3,10 +3,24 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useConversation, ConversationProvider } from "@elevenlabs/react";
-import { Mic, MicOff } from "lucide-react";
+import { Mic, MicOff, Settings2 } from "lucide-react";
 import { VoiceOrb, type OrbState } from "@/components/voice/voice-orb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getVoiceGender } from "@/lib/voice-client";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  getVoiceGender,
+  setVoiceGender,
+  LANGUAGE_OPTIONS,
+  type VoiceGender,
+  type LanguageCode,
+} from "@/lib/voice-client";
 import { getAssistantName } from "@/lib/voice-session-opening";
 import {
   buildAmbientAgentPrompt,
@@ -15,7 +29,7 @@ import {
 } from "@/lib/ambient-agent-prompt";
 import { buildFormBuilderAgentPrompt, buildFormBuilderFirstMessage } from "@/lib/form-builder-agent-prompt";
 import { normalizeFieldType, FIELD_TYPE_HINT } from "@/lib/voice-form-builder-validate";
-import { useFormBuilderDraft, needsOptions } from "@/lib/form-builder-draft-store";
+import { useFormBuilderDraft, needsOptions, type MoveDirection } from "@/lib/form-builder-draft-store";
 import { useFormsStore } from "@/lib/forms-store";
 import {
   useEntriesStore,
@@ -39,14 +53,19 @@ const PAGE_ROUTES: Record<string, string> = {
 
 const FORM_BUILDER_ROUTE = "/form-builder/new";
 
+function asDirection(v: unknown): MoveDirection | null {
+  return v === "up" ? "up" : v === "down" ? "down" : null;
+}
+
 /** Always-on ambient assistant, present on every authenticated page (see
- * (app)/layout.tsx) — a small floating orb on the right edge of the
- * screen, distinct from the form-filling agent in voice-experience.tsx.
- * Connects to a second ElevenLabs agent (?agent=ambient) with its own
- * tool set: navigation, starting/building forms, activating/deactivating
- * forms, resending a customer's PDF email, and logout. While on
- * /form-builder/new specifically, it reconnects to a *third* agent
- * (?agent=form-builder) scoped to voice-driven form building, then
+ * (app)/layout.tsx) — a small floating panel on the right edge of the
+ * screen, styled like the voice-filling experience's own control bar
+ * (voice-experience.tsx), distinct from that agent entirely. Connects to
+ * a second ElevenLabs agent (?agent=ambient) with its own tool set:
+ * navigation, starting/building forms, activating/deactivating forms,
+ * resending a customer's PDF email, going quiet on request, and logout.
+ * While on /form-builder/new specifically, it reconnects to a *third*
+ * agent (?agent=form-builder) scoped to voice-driven form building, then
  * reconnects back the moment the user navigates away. */
 export function AmbientVoiceWidget() {
   return (
@@ -63,6 +82,14 @@ function AmbientVoiceWidgetInner() {
   const { entries, upsertEntry } = useEntriesStore();
   const draftStore = useFormBuilderDraft();
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [language, setLanguageState] = useState<LanguageCode>("en");
+  const [voiceGender, setVoiceGenderState] = useState<VoiceGender>(() => getVoiceGender());
+  // Set by the voice-triggered go_silent/resume_speaking tools — distinct
+  // from the manual mute button below (which cuts the mic entirely, so it
+  // could never hear "unmute"). This instead silences the assistant's own
+  // output (conversation.setVolume) while leaving the mic live, so it can
+  // still hear the word to resume.
+  const [silenced, setSilenced] = useState(false);
   const isFormBuilderNew = pathname === FORM_BUILDER_ROUTE;
 
   // Client tool closures run inside the SDK's own event handling, not a
@@ -136,6 +163,9 @@ function AmbientVoiceWidgetInner() {
         if (!target) {
           return `Couldn't find a form called "${params.form_name}". Forms: ${currentForms.map((f) => f.name).join(", ")}.`;
         }
+        if (target.status === "draft") {
+          return `"${target.name}" is still a draft — publish it from the editor first, then it can be activated or deactivated.`;
+        }
         setFormStatus(target.id, status);
         return `${target.name} is now ${status}.`;
       },
@@ -164,6 +194,9 @@ function AmbientVoiceWidgetInner() {
         upsertEntry(withEmailResent(withCustomerEmail(entry, email), email));
         return `Got it — sent the PDF to ${email}.`;
       },
+      // Prompt requires a spoken confirmation before this ever gets
+      // called (see ambient-agent-prompt.ts) — by the time it's called,
+      // the user has already said yes, so it acts immediately.
       logout: async () => {
         await performLogout();
         router.push("/login");
@@ -171,11 +204,27 @@ function AmbientVoiceWidgetInner() {
         return "Logging out now.";
       },
 
+      // --- Silence, shared by both agents (ambient + form-builder) ---
+      go_silent: async () => {
+        setSilenced(true);
+        conversation.setVolume({ volume: 0 });
+        return "ok";
+      },
+      resume_speaking: async () => {
+        setSilenced(false);
+        conversation.setVolume({ volume: 1 });
+        return "I'm back.";
+      },
+
       // --- Form-builder-mode tools (agent=form-builder, only reachable
       // while that agent is connected, i.e. on /form-builder/new) ---
       set_form_name: async (params: { name?: string }) => {
         if (!params.name?.trim()) return "What should the form be called?";
         return draftStoreRef.current.setFormNameByVoice(params.name).message;
+      },
+      set_form_description: async (params: { description?: string }) => {
+        if (!params.description?.trim()) return "What should the description say?";
+        return draftStoreRef.current.setDescriptionByVoice(params.description).message;
       },
       add_question: async (params: {
         question_text?: string;
@@ -209,6 +258,55 @@ function AmbientVoiceWidgetInner() {
         if (!params.question_text?.trim()) return "Which question should I remove?";
         return draftStoreRef.current.removeQuestionByVoice(params.question_text).message;
       },
+      update_question: async (params: {
+        question_text?: string;
+        new_question_text?: string;
+        field_type?: string;
+        required?: string;
+        options?: string;
+      }) => {
+        if (!params.question_text?.trim()) return "Which question should I change?";
+        let fieldType;
+        if (params.field_type?.trim()) {
+          fieldType = normalizeFieldType(params.field_type) ?? undefined;
+          if (!fieldType) {
+            return `That's not a type I recognize — it needs to be one of: ${FIELD_TYPE_HINT}.`;
+          }
+        }
+        return draftStoreRef.current.updateQuestionByVoice(params.question_text, {
+          questionText: params.new_question_text,
+          fieldType,
+          required: params.required === undefined ? undefined : params.required !== "false",
+          options: params.options
+            ? params.options.split(",").map((o) => o.trim()).filter(Boolean)
+            : undefined,
+        }).message;
+      },
+      move_question: async (params: { question_text?: string; direction?: string }) => {
+        if (!params.question_text?.trim()) return "Which question should I move?";
+        const direction = asDirection(params.direction);
+        if (!direction) return 'Direction must be "up" or "down".';
+        return draftStoreRef.current.moveQuestionByVoice(params.question_text, direction).message;
+      },
+      add_section: async (params: { title?: string }) => {
+        return draftStoreRef.current.addSectionByVoice(params.title).message;
+      },
+      set_section_title: async (params: { section?: string; title?: string }) => {
+        if (!params.section?.trim() || !params.title?.trim()) {
+          return "I need to know which section, and its new title.";
+        }
+        return draftStoreRef.current.setSectionTitleByVoice(params.section, params.title).message;
+      },
+      move_section: async (params: { section?: string; direction?: string }) => {
+        if (!params.section?.trim()) return "Which section should I move?";
+        const direction = asDirection(params.direction);
+        if (!direction) return 'Direction must be "up" or "down".';
+        return draftStoreRef.current.moveSectionByVoice(params.section, direction).message;
+      },
+      toggle_entry_column: async (params: { field?: string }) => {
+        if (!params.field?.trim()) return "Which field?";
+        return draftStoreRef.current.toggleEntryColumnByVoice(params.field).message;
+      },
       save_form: async (params: { status?: string }) => {
         const statusOverride =
           params.status === "active" ? "active" : params.status === "inactive" ? "inactive" : params.status === "draft" ? "draft" : undefined;
@@ -221,13 +319,22 @@ function AmbientVoiceWidgetInner() {
 
   // A function declaration (not `const`), same reasoning as
   // voice-experience.tsx's connectSession: it's invoked from the
-  // auto-connect effect, the mode-change effect, and the orb's click
-  // handler (the manual-retry path), so it can't live inside just one.
-  // `builderMode` picks which of the two agents to connect to;
-  // `isReconnect` (a same-conversation continuation, not the very first
-  // connect of the session) picks a short transition line instead of the
-  // full name+quote self-introduction.
-  async function connectAmbientSession(builderMode: boolean, isReconnect: boolean) {
+  // auto-connect effect, the mode-change effect, the settings popover,
+  // and the orb's click handler (the manual-retry path), so it can't live
+  // inside just one of them. `builderMode` picks which of the two agents
+  // to connect to; `isReconnect` (a same-conversation continuation, not
+  // the very first connect of the session) picks a short transition line
+  // instead of the full name+quote self-introduction. The two overrides
+  // exist because a settings change needs its new value applied
+  // immediately, and reading the just-set React state back in the same
+  // tick isn't reliable (setState is async) — so the settings handlers
+  // pass the new value straight through instead.
+  async function connectAmbientSession(
+    builderMode: boolean,
+    isReconnect: boolean,
+    languageOverride?: LanguageCode,
+    genderOverride?: VoiceGender
+  ) {
     setConnectError(null);
     try {
       const agentParam = builderMode ? "form-builder" : "ambient";
@@ -237,7 +344,8 @@ function AmbientVoiceWidgetInner() {
         throw new Error(body?.detail || body?.error || "Couldn't start the ambient assistant");
       }
       const { signedUrl } = await res.json();
-      const gender = getVoiceGender();
+      const gender = genderOverride ?? getVoiceGender();
+      const lang = languageOverride ?? language;
       const assistantName = getAssistantName(gender);
       const voiceId = gender === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
       const prompt = builderMode
@@ -254,11 +362,14 @@ function AmbientVoiceWidgetInner() {
           agent: {
             prompt: { prompt },
             firstMessage,
-            language: "en",
+            language: lang,
           },
           tts: { voiceId },
         },
       });
+      // Fresh session: neither of these should carry over from before.
+      setSilenced(false);
+      conversation.setVolume({ volume: 1 });
       // Start muted and let the speaking/listening effect below do the
       // unmuting once the greeting actually finishes — closes the race
       // where the agent's own opening line could start playing before
@@ -322,6 +433,26 @@ function AmbientVoiceWidgetInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.mode, conversation.status]);
 
+  function changeLanguage(next: LanguageCode) {
+    setLanguageState(next);
+    conversation.endSession();
+    connectAmbientSession(isFormBuilderNew, true, next);
+  }
+
+  function changeVoiceGender(next: VoiceGender) {
+    setVoiceGenderState(next);
+    setVoiceGender(next);
+    conversation.endSession();
+    connectAmbientSession(isFormBuilderNew, true, undefined, next);
+  }
+
+  // onError can fire with a transient, non-fatal warning even on a
+  // connection that's otherwise fine (conversation.status genuinely says
+  // "connected") — only treat it as a real, user-facing error state when
+  // the session isn't actually connected, so a stale message can't hide
+  // the status label or the mic/settings controls on a healthy session.
+  const hasBlockingError = Boolean(connectError) && conversation.status !== "connected";
+
   const orbState: OrbState =
     conversation.status === "connecting"
       ? "thinking"
@@ -331,19 +462,21 @@ function AmbientVoiceWidgetInner() {
           ? "speaking"
           : "listening";
 
-  const statusLabel = connectError
+  const statusLabel = hasBlockingError
     ? "Tap to reconnect"
     : conversation.status === "connecting"
       ? "Connecting…"
       : conversation.status !== "connected"
         ? "Tap to connect"
-        : conversation.isMuted
-          ? "Muted"
-          : conversation.mode === "speaking"
-            ? "Speaking"
-            : isFormBuilderNew
-              ? "Building your form"
-              : "Listening";
+        : silenced
+          ? 'Silenced — say "unmute"'
+          : conversation.isMuted
+            ? "Muted"
+            : conversation.mode === "speaking"
+              ? "Speaking"
+              : isFormBuilderNew
+                ? "Building your form"
+                : "Listening";
 
   function handleOrbClick() {
     // A disconnected/errored widget (mic permission denied, network blip)
@@ -355,45 +488,103 @@ function AmbientVoiceWidgetInner() {
   }
 
   return (
-    <div className="fixed right-5 top-1/2 z-40 flex -translate-y-1/2 flex-col items-center gap-2">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={handleOrbClick}
-            aria-label={statusLabel}
-            className="cursor-pointer rounded-full"
-          >
-            <VoiceOrb state={orbState} size={56} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="left">{statusLabel}</TooltipContent>
-      </Tooltip>
-      {conversation.status === "connected" && (
+    <div className="fixed right-5 top-1/2 z-40 -translate-y-1/2">
+      <div className="flex flex-col items-center gap-3 rounded-3xl bg-[#0b1f33] px-4 py-4 text-white shadow-lg">
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={() => {
-                const next = !conversation.isMuted;
-                userMutedRef.current = next;
-                conversation.setMuted(next);
-              }}
-              aria-label={conversation.isMuted ? "Unmute assistant" : "Mute assistant"}
-              className="flex size-7 items-center justify-center rounded-full bg-card text-muted-foreground shadow-sm ring-1 ring-border/60 transition-colors hover:text-foreground"
+              onClick={handleOrbClick}
+              aria-label={statusLabel}
+              className="cursor-pointer rounded-full"
             >
-              {conversation.isMuted ? (
-                <MicOff className="size-3.5" />
-              ) : (
-                <Mic className="size-3.5" />
-              )}
+              <VoiceOrb state={orbState} size={64} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="left">
-            {conversation.isMuted ? "Unmute" : "Mute"}
-          </TooltipContent>
+          <TooltipContent side="left">{statusLabel}</TooltipContent>
         </Tooltip>
-      )}
+
+        <span className="max-w-[92px] text-center text-[10px] font-medium uppercase leading-tight tracking-wide text-white/40">
+          {statusLabel}
+        </span>
+
+        {conversation.status === "connected" && (
+          <div className="flex items-center gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !conversation.isMuted;
+                    userMutedRef.current = next;
+                    conversation.setMuted(next);
+                  }}
+                  aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
+                  className={muteButtonClass(conversation.isMuted)}
+                >
+                  {conversation.isMuted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">{conversation.isMuted ? "Unmute" : "Mute"}</TooltipContent>
+            </Tooltip>
+
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Voice settings"
+                  className="flex size-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+                >
+                  <Settings2 className="size-4" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" side="left" className="w-64 border-none bg-background">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Spoken language</span>
+                    <Select value={language} onValueChange={(v) => changeLanguage(v as LanguageCode)}>
+                      <SelectTrigger className="h-9 w-full rounded-lg">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {LANGUAGE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">
+                      Reconnects the assistant right away.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Assistant voice</span>
+                    <Select value={voiceGender} onValueChange={(v) => changeVoiceGender(v as VoiceGender)}>
+                      <SelectTrigger className="h-9 w-full rounded-lg">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="female">Female</SelectItem>
+                        <SelectItem value="male">Male</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">
+                      Reconnects the assistant right away, and is remembered on this device.
+                    </p>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+        )}
+      </div>
     </div>
   );
+}
+
+function muteButtonClass(active: boolean): string {
+  return active
+    ? "flex size-9 items-center justify-center rounded-full bg-white/15 text-white transition-colors"
+    : "flex size-9 items-center justify-center rounded-full bg-teal text-teal-foreground transition-colors";
 }

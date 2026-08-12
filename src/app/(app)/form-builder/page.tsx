@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { Plus, MoreHorizontal, Layers, ListTree, Copy, Power } from "lucide-react";
+import { Plus, MoreHorizontal, Layers, ListTree, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useFormsStore } from "@/lib/forms-store";
@@ -47,6 +48,7 @@ export default function FormBuilderPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {forms.map((form) => {
           const questionCount = getAllQuestions(form).length;
+          const isDraft = form.status === "draft";
           return (
             <div
               key={form.id}
@@ -72,16 +74,6 @@ export default function FormBuilderPage() {
                     <DropdownMenuItem className="px-2 py-1.5" disabled>
                       <Copy className="size-4" />
                       Duplicate
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="px-2 py-1.5"
-                      onClick={() =>
-                        setFormStatus(form.id, form.status === "active" ? "inactive" : "active")
-                      }
-                    >
-                      <Power className="size-4" />
-                      {form.status === "active" ? "Deactivate" : "Activate"}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -113,6 +105,37 @@ export default function FormBuilderPage() {
                 <span>{questionCount} questions</span>
                 <span>·</span>
                 <span>{form.totalEntries} entries</span>
+              </div>
+
+              {/* Active/inactive lives here now, not inside the editor —
+               * the one place a form's live-or-not state is toggled.
+               * Disabled while still a draft: a draft isn't voice-fillable
+               * yet regardless of this switch, so flipping it here would
+               * be misleading — finish it in the editor (Publish) first. */}
+              <div className="flex items-center justify-between rounded-xl bg-muted px-3 py-2.5">
+                <span className="text-xs font-medium text-foreground">
+                  {isDraft ? "Publish from the editor to activate" : "Active"}
+                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Switch
+                        size="sm"
+                        checked={form.status === "active"}
+                        disabled={isDraft}
+                        onCheckedChange={(checked) =>
+                          setFormStatus(form.id, checked ? "active" : "inactive")
+                        }
+                        aria-label={form.status === "active" ? "Deactivate form" : "Activate form"}
+                      />
+                    </span>
+                  </TooltipTrigger>
+                  {isDraft && (
+                    <TooltipContent side="top">
+                      Still a draft — publish it from the editor first
+                    </TooltipContent>
+                  )}
+                </Tooltip>
               </div>
 
               <div className="flex items-center justify-between border-t border-border/60 pt-3">

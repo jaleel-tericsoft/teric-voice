@@ -4,17 +4,16 @@
 // forms-store.tsx/entries-store.tsx (no backend yet, doesn't survive a
 // reload). Lifted out of form-builder/new/page.tsx into a context mounted
 // at the (app) layout specifically so the ambient voice widget's
-// form-builder tools (add_question, remove_question, set_form_name,
-// save_form) can drive the exact same state the manual UI edits — one
-// source of truth either way, not two copies that could drift apart.
+// form-builder tools can drive the exact same state the manual UI edits —
+// one source of truth either way, not two copies that could drift apart.
 //
 // The page's own click-driven editing (per-section/per-question add/
 // remove, drag handles, checkboxes) still lives in the page component
 // itself, unchanged — it just reads/writes through this store's raw state
 // setters (same shape as useState's) instead of local useState. Only the
-// handful of actions the voice tools need are modeled here as first-class
-// store methods, since those are the ones a tool handler outside the page
-// has to call.
+// actions the voice tools need are modeled here as first-class store
+// methods, since those are the ones a tool handler outside the page has
+// to call.
 
 import {
   createContext,
@@ -68,8 +67,8 @@ export function newQuestion(): DraftQuestion {
   return { id: uid("q"), questionText: "", fieldType: "short_text", required: true, optionsText: "" };
 }
 
-export function newSection(index: number): DraftSection {
-  return { id: uid("s"), title: `Section ${index}`, questions: [newQuestion()] };
+export function newSection(index: number, title?: string): DraftSection {
+  return { id: uid("s"), title: title?.trim() || `Section ${index}`, questions: [newQuestion()] };
 }
 
 export function needsOptions(type: FieldType): boolean {
@@ -106,10 +105,60 @@ function sectionsFromForm(form: FormDefinition): DraftSection[] {
   }));
 }
 
+/** Resolves a spoken section reference — an ordinal ("the second
+ * section", "section 3"), "last", or a fragment of its current title
+ * ("the vehicle details section") — to an index. Returns -1 if nothing
+ * matches. Shared by every voice action that targets a section. */
+function findSectionIndex(sections: DraftSection[], identifier: string): number {
+  const needle = identifier.trim().toLowerCase();
+  if (!needle) return -1;
+
+  if (/\blast\b/.test(needle)) return sections.length - 1;
+
+  const numMatch = needle.match(/\d+/);
+  if (numMatch) {
+    const n = parseInt(numMatch[0], 10);
+    if (n >= 1 && n <= sections.length) return n - 1;
+  }
+
+  const ordinals: Record<string, number> = {
+    first: 1,
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+  };
+  for (const [word, n] of Object.entries(ordinals)) {
+    if (needle.includes(word) && n <= sections.length) return n - 1;
+  }
+
+  return sections.findIndex((s) => s.title.toLowerCase().includes(needle));
+}
+
+/** Same idea as findSectionIndex, but for a question — searched across
+ * every section by a fragment of its text, since a question doesn't have
+ * a natural ordinal the way a section does. Returns the section+question
+ * index pair, or null if nothing matches. */
+function findQuestionLocation(
+  sections: DraftSection[],
+  identifier: string
+): { sectionIndex: number; questionIndex: number } | null {
+  const needle = identifier.trim().toLowerCase();
+  if (!needle) return null;
+  for (let si = 0; si < sections.length; si++) {
+    const qi = sections[si].questions.findIndex((q) => q.questionText.toLowerCase().includes(needle));
+    if (qi !== -1) return { sectionIndex: si, questionIndex: qi };
+  }
+  return null;
+}
+
 interface ActionResult {
   ok: boolean;
   message: string;
 }
+
+export type MoveDirection = "up" | "down";
 
 interface FormBuilderDraftStore {
   name: string;
@@ -136,8 +185,14 @@ interface FormBuilderDraftStore {
    * saves, and can't rely on a setState call landing before this reads
    * it back. */
   save: (statusOverride?: FormStatus) => ActionResult;
-  /** Adds a question to the last section — the target for the voice
-   * widget's add_question tool. */
+  setFormNameByVoice: (name: string) => ActionResult;
+  setDescriptionByVoice: (description: string) => ActionResult;
+  /** Adds a question to the last section. Reuses that section's still-
+   * blank default question (the one every new section starts with) if
+   * it's there and untouched, rather than always appending a new one —
+   * otherwise a section's starter question block just sits there empty
+   * forever, uncounted and unsaved, while every voice-added question
+   * piles up after it. */
   addQuestionByVoice: (input: {
     questionText: string;
     fieldType: FieldType;
@@ -147,7 +202,28 @@ interface FormBuilderDraftStore {
   /** Removes the first question whose text contains the given text
    * (case-insensitive) — the target for remove_question. */
   removeQuestionByVoice: (questionText: string) => ActionResult;
-  setFormNameByVoice: (name: string) => ActionResult;
+  /** Changes one or more fields on an already-added question, identified
+   * by a fragment of its current text — the target for update_question
+   * ("change any field when asked"). */
+  updateQuestionByVoice: (
+    identifier: string,
+    patch: {
+      questionText?: string;
+      fieldType?: FieldType;
+      required?: boolean;
+      options?: string[];
+    }
+  ) => ActionResult;
+  /** Swaps a question with its neighbor in the given direction, within
+   * its own section. */
+  moveQuestionByVoice: (identifier: string, direction: MoveDirection) => ActionResult;
+  addSectionByVoice: (title?: string) => ActionResult;
+  setSectionTitleByVoice: (identifier: string, title: string) => ActionResult;
+  /** Swaps a section with its neighbor in the given direction. */
+  moveSectionByVoice: (identifier: string, direction: MoveDirection) => ActionResult;
+  /** Adds or removes a field from the Entries table column picker,
+   * matched by field name or its question label. */
+  toggleEntryColumnByVoice: (fieldNameOrLabel: string) => ActionResult;
 }
 
 const FormBuilderDraftContext = createContext<FormBuilderDraftStore | null>(null);
@@ -253,6 +329,20 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
     [addForm, description, editingForm, entryColumns, forms, name, sections, status, updateForm]
   );
 
+  const setFormNameByVoice = useCallback((newName: string): ActionResult => {
+    const trimmed = newName.trim();
+    if (!trimmed) return { ok: false, message: "I need an actual name to set." };
+    setName(trimmed);
+    return { ok: true, message: `Form name set to "${trimmed}".` };
+  }, []);
+
+  const setDescriptionByVoice = useCallback((newDescription: string): ActionResult => {
+    const trimmed = newDescription.trim();
+    if (!trimmed) return { ok: false, message: "I need an actual description to set." };
+    setDescription(trimmed);
+    return { ok: true, message: "Description set." };
+  }, []);
+
   const addQuestionByVoice = useCallback(
     ({
       questionText,
@@ -270,6 +360,7 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
       setSections((prev) => {
         const next = [...prev];
         const lastIdx = next.length - 1;
+        const lastSection = next[lastIdx];
         const question: DraftQuestion = {
           id: uid("q"),
           questionText: trimmed,
@@ -277,7 +368,16 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
           required,
           optionsText: options.join(", "),
         };
-        next[lastIdx] = { ...next[lastIdx], questions: [...next[lastIdx].questions, question] };
+        // Reuse the section's still-blank starter question in place,
+        // rather than leaving it stranded and piling this one on after —
+        // see the store method's own doc comment above for why.
+        const blankIdx = lastSection.questions.length - 1;
+        const lastQuestionIsBlank =
+          lastSection.questions.length > 0 && !lastSection.questions[blankIdx].questionText.trim();
+        const questions = lastQuestionIsBlank
+          ? lastSection.questions.map((q, i) => (i === blankIdx ? { ...question, id: q.id } : q))
+          : [...lastSection.questions, question];
+        next[lastIdx] = { ...lastSection, questions };
         return next;
       });
       return { ok: true, message: `Added "${trimmed}".` };
@@ -316,12 +416,139 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
     return { ok: false, message: `Couldn't find a question matching "${questionText}".` };
   }, []);
 
-  const setFormNameByVoice = useCallback((newName: string): ActionResult => {
-    const trimmed = newName.trim();
-    if (!trimmed) return { ok: false, message: "I need an actual name to set." };
-    setName(trimmed);
-    return { ok: true, message: `Form name set to "${trimmed}".` };
+  const updateQuestionByVoice = useCallback(
+    (
+      identifier: string,
+      patch: { questionText?: string; fieldType?: FieldType; required?: boolean; options?: string[] }
+    ): ActionResult => {
+      let result: ActionResult | null = null;
+      setSections((prev) => {
+        const loc = findQuestionLocation(prev, identifier);
+        if (!loc) {
+          result = { ok: false, message: `Couldn't find a question matching "${identifier}".` };
+          return prev;
+        }
+        const next = [...prev];
+        const section = next[loc.sectionIndex];
+        const question = section.questions[loc.questionIndex];
+        const updated: DraftQuestion = {
+          ...question,
+          questionText: patch.questionText?.trim() || question.questionText,
+          fieldType: patch.fieldType ?? question.fieldType,
+          required: patch.required ?? question.required,
+          optionsText: patch.options ? patch.options.join(", ") : question.optionsText,
+        };
+        next[loc.sectionIndex] = {
+          ...section,
+          questions: section.questions.map((q, i) => (i === loc.questionIndex ? updated : q)),
+        };
+        result = { ok: true, message: `Updated "${updated.questionText}".` };
+        return next;
+      });
+      return result ?? { ok: false, message: "Nothing changed." };
+    },
+    []
+  );
+
+  const moveQuestionByVoice = useCallback((identifier: string, direction: MoveDirection): ActionResult => {
+    let result: ActionResult | null = null;
+    setSections((prev) => {
+      const loc = findQuestionLocation(prev, identifier);
+      if (!loc) {
+        result = { ok: false, message: `Couldn't find a question matching "${identifier}".` };
+        return prev;
+      }
+      const section = prev[loc.sectionIndex];
+      const targetIdx = direction === "up" ? loc.questionIndex - 1 : loc.questionIndex + 1;
+      if (targetIdx < 0 || targetIdx >= section.questions.length) {
+        result = { ok: false, message: `That question is already at the ${direction === "up" ? "top" : "bottom"} of its section.` };
+        return prev;
+      }
+      const questions = [...section.questions];
+      [questions[loc.questionIndex], questions[targetIdx]] = [questions[targetIdx], questions[loc.questionIndex]];
+      const next = [...prev];
+      next[loc.sectionIndex] = { ...section, questions };
+      result = { ok: true, message: `Moved ${direction}.` };
+      return next;
+    });
+    return result ?? { ok: false, message: "Nothing changed." };
   }, []);
+
+  const addSectionByVoice = useCallback((title?: string): ActionResult => {
+    let sectionTitle = "";
+    setSections((prev) => {
+      const section = newSection(prev.length + 1, title);
+      sectionTitle = section.title;
+      return [...prev, section];
+    });
+    return { ok: true, message: `Added a new section${sectionTitle ? `, "${sectionTitle}"` : ""}.` };
+  }, []);
+
+  const setSectionTitleByVoice = useCallback((identifier: string, title: string): ActionResult => {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) return { ok: false, message: "I need an actual title to set." };
+    let result: ActionResult | null = null;
+    setSections((prev) => {
+      const idx = findSectionIndex(prev, identifier);
+      if (idx === -1) {
+        result = { ok: false, message: `Couldn't find a section matching "${identifier}".` };
+        return prev;
+      }
+      const next = [...prev];
+      next[idx] = { ...next[idx], title: trimmedTitle };
+      result = { ok: true, message: `Section renamed to "${trimmedTitle}".` };
+      return next;
+    });
+    return result ?? { ok: false, message: "Nothing changed." };
+  }, []);
+
+  const moveSectionByVoice = useCallback((identifier: string, direction: MoveDirection): ActionResult => {
+    let result: ActionResult | null = null;
+    setSections((prev) => {
+      const idx = findSectionIndex(prev, identifier);
+      if (idx === -1) {
+        result = { ok: false, message: `Couldn't find a section matching "${identifier}".` };
+        return prev;
+      }
+      const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= prev.length) {
+        result = { ok: false, message: `That section is already at the ${direction === "up" ? "top" : "bottom"}.` };
+        return prev;
+      }
+      const next = [...prev];
+      [next[idx], next[targetIdx]] = [next[targetIdx], next[idx]];
+      result = { ok: true, message: `Moved ${direction}.` };
+      return next;
+    });
+    return result ?? { ok: false, message: "Nothing changed." };
+  }, []);
+
+  const toggleEntryColumnByVoice = useCallback(
+    (fieldNameOrLabel: string): ActionResult => {
+      const needle = fieldNameOrLabel.trim().toLowerCase();
+      if (!needle) return { ok: false, message: "I need to know which field." };
+      const allFields = computeAllFields(sections);
+      const match =
+        allFields.find((f) => f.fieldName.toLowerCase() === needle) ??
+        allFields.find((f) => f.label.toLowerCase().includes(needle));
+      if (!match) return { ok: false, message: `Couldn't find a field matching "${fieldNameOrLabel}".` };
+
+      let nowIncluded = false;
+      setEntryColumns((prev) => {
+        if (prev.includes(match.fieldName)) {
+          nowIncluded = false;
+          return prev.filter((f) => f !== match.fieldName);
+        }
+        nowIncluded = true;
+        return [...prev, match.fieldName];
+      });
+      return {
+        ok: true,
+        message: `"${match.label}" is ${nowIncluded ? "now" : "no longer"} shown as an Entries column.`,
+      };
+    },
+    [sections]
+  );
 
   const value = useMemo<FormBuilderDraftStore>(
     () => ({
@@ -339,9 +566,16 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
       editingForm,
       ensureInitialized,
       save,
+      setFormNameByVoice,
+      setDescriptionByVoice,
       addQuestionByVoice,
       removeQuestionByVoice,
-      setFormNameByVoice,
+      updateQuestionByVoice,
+      moveQuestionByVoice,
+      addSectionByVoice,
+      setSectionTitleByVoice,
+      moveSectionByVoice,
+      toggleEntryColumnByVoice,
     }),
     [
       name,
@@ -352,9 +586,16 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
       editingForm,
       ensureInitialized,
       save,
+      setFormNameByVoice,
+      setDescriptionByVoice,
       addQuestionByVoice,
       removeQuestionByVoice,
-      setFormNameByVoice,
+      updateQuestionByVoice,
+      moveQuestionByVoice,
+      addSectionByVoice,
+      setSectionTitleByVoice,
+      moveSectionByVoice,
+      toggleEntryColumnByVoice,
     ]
   );
 

@@ -30,7 +30,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getAllQuestions, findQuestion } from "@/lib/form-utils";
-import { getVoiceGender, setVoiceGender, type VoiceGender } from "@/lib/voice-client";
+import {
+  getVoiceGender,
+  setVoiceGender,
+  LANGUAGE_OPTIONS,
+  type VoiceGender,
+  type LanguageCode,
+} from "@/lib/voice-client";
 import { buildAgentPrompt, buildFirstMessage } from "@/lib/voice-agent-prompt";
 import { getAssistantName, getDailyOpeningQuote } from "@/lib/voice-session-opening";
 import { unlockAudioPlayback } from "@/lib/audio-unlock";
@@ -99,12 +105,6 @@ function buildEntry(params: {
     ],
   };
 }
-
-const LANGUAGE_OPTIONS = [
-  { value: "en", label: "English" },
-  { value: "hi", label: "Hindi" },
-] as const;
-type LanguageCode = (typeof LANGUAGE_OPTIONS)[number]["value"];
 
 type MessageLine = { text: string; kind: "sentence" | "option" };
 

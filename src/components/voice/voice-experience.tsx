@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useConversation, ConversationProvider } from "@elevenlabs/react";
 import {
   X,
   Mic,
@@ -29,102 +30,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getAllQuestions } from "@/lib/form-utils";
-import {
-  MicSession,
-  speakText,
-  transcribeAudio,
-  interpretAnswer,
-  interpretReviewCommand,
-  getSensitivityConfig,
-  getVoiceGender,
-  setVoiceGender,
-  type VoiceGender,
-  type Interpretation,
-} from "@/lib/voice-client";
+import { getAllQuestions, findQuestion } from "@/lib/form-utils";
+import { getVoiceGender, setVoiceGender, type VoiceGender } from "@/lib/voice-client";
+import { buildAgentPrompt, buildFirstMessage } from "@/lib/voice-agent-prompt";
+import { validateAnswer, canSkip } from "@/lib/voice-agent-validate";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
-import type { Entry, EntryAnswer, FormDefinition, FormQuestion } from "@/types";
+import type { Entry, EntryAnswer, FormDefinition } from "@/types";
 
-const MAX_RETRIES = 2; // repeat the question up to this many times if unanswered
-const NEGATIVE_RE = /\b(no|nope|not correct|wrong|incorrect)\b/i;
-const SUBMIT_INTENT_RE =
-  /\b(submit|confirm(?:ed)?|that'?s (?:correct|right|it|all)|go ahead|looks good|yes,? submit)\b/i;
-// Not anchored to the whole utterance — real speech wraps the core phrase
-// in other words ("please skip this one", "let's just skip that question"),
-// and requiring an exact match meant those never registered as a skip at
-// all, silently falling through to a normal (failing) answer attempt.
-const SKIP_PHRASE_RE = /\bskip\b|\bnext question\b|\bn\/a\b|\bnot applicable\b/i;
-
-/** True if the transcript is a request to skip the question rather than a
- * genuine attempt to answer it. Guarded by word count so a real, longer
- * answer that happens to contain "skip" (e.g. describing an engine that
- * "skips at idle") isn't misread as a command — a bare skip request stays
- * short even with a few polite words around it. */
-function isSkipCommand(transcript: string): boolean {
-  const trimmed = transcript.trim();
-  if (!trimmed) return false;
-  if (trimmed.split(/\s+/).length > 8) return false;
-  return SKIP_PHRASE_RE.test(trimmed);
-}
-
-const KM_TO_MILES = 0.621371;
-
-/** A distance question (e.g. odometer reading) asks for miles, but people
- * often think and speak in kilometers — this converts a km figure to miles
- * rather than silently storing the wrong-unit number as-is. The conversion
- * itself is deterministic code, not left to the model — interpretAnswer
- * only reports which unit was said, never does the math itself. No-op for
- * anything that isn't a km-stated distance value. */
-function normalizeDistanceValue(
-  value: string | boolean,
-  statedUnit: Interpretation["stated_distance_unit"]
-): string | boolean {
-  if (statedUnit !== "km" || typeof value !== "string") return value;
-  const raw = Number(value.replace(/[^0-9.]/g, ""));
-  if (Number.isNaN(raw)) return value;
-  return String(Math.round(raw * KM_TO_MILES));
-}
-
-// Broader than the skip/submit phrases on purpose — someone asking to save
-// and step away tends to phrase it more like an aside than a command
-// ("I have an emergency, can I save this and come back later?"), so this
-// leans on a wider net of natural ways to say it rather than one exact form.
-const SAVE_DRAFT_RE =
-  /\bsave\b.*\b(draft|later|exit)\b|\b(draft|exit)\b.*\bsave\b|\bsave (?:my|this) progress\b|\bcome back later\b|\b(finish|continue) (?:this )?later\b|\bi(?:'ve| have) (?:got )?an emergency\b|\b(?:i need to|i've got to|i have to) (?:go|leave|step away)\b|\bsomething(?:'s| has) come up\b/i;
-
-function isSaveDraftCommand(transcript: string): boolean {
-  const trimmed = transcript.trim();
-  if (!trimmed) return false;
-  if (trimmed.split(/\s+/).length > 20) return false; // generous — these run longer than a bare command
-  return SAVE_DRAFT_RE.test(trimmed);
-}
-
-/** Politely flags a date that breaks its field's constraint (e.g. a "last
- * serviced" date that's somehow in the future) instead of silently
- * accepting something that can't be true. Returns null when the date is
- * fine, unparseable (let the normal flow handle that), or the field has no
- * constraint. */
-function dateConstraintMessage(
-  constraint: FormQuestion["dateConstraint"],
-  isoDate: string
-): string | null {
-  if (!constraint) return null;
-  const date = new Date(isoDate);
-  if (Number.isNaN(date.getTime())) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-
-  if (constraint === "past" && date.getTime() > today.getTime()) {
-    return "That date's actually in the future, and this needs to be one that's already happened — let's try that again.";
-  }
-  if (constraint === "future" && date.getTime() < today.getTime()) {
-    return "That date's already passed — let's get one that's still ahead of us.";
-  }
-  return null;
-}
+// ElevenLabs' well-known premade voices — same pair the old plain-TTS route
+// used, now selected client-side via overrides.tts.voiceId per session
+// instead of a server-side request body field.
+const FEMALE_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"; // Rachel
+const MALE_VOICE_ID = "pNInz6obpgDQGcFmaJgB"; // Adam
 
 let entryIdCounter = 0;
 function generateEntryId(): string {
@@ -186,64 +105,24 @@ const LANGUAGE_OPTIONS = [
 ] as const;
 type LanguageCode = (typeof LANGUAGE_OPTIONS)[number]["value"];
 
-function isPaused(pausedRef: { current: boolean }, cancelledRef: { current: boolean }) {
-  return new Promise<void>((resolve) => {
-    const check = () => {
-      if (cancelledRef.current || !pausedRef.current) return resolve();
-      setTimeout(check, 150);
-    };
-    check();
-  });
-}
-
-/** Builds what the assistant should say for a question, including reading
- * out the options for a dropdown/single-select field. */
-function questionPrompt(q: FormQuestion, attempt: number): string {
-  let text = attempt === 0 ? q.questionText : `Sorry, I didn't catch that. ${q.questionText}`;
-  if (q.fieldType === "single_select" && q.options?.length) {
-    const labels = q.options.map((o) => o.label).join(", ");
-    text += ` Your options are: ${labels}.`;
-  }
-  return text;
-}
-
 type MessageLine = { text: string; kind: "sentence" | "option" };
 
 /** Reformats one spoken assistant turn for display: one sentence per line
- * instead of a single dense paragraph, and a spoken "Your options are: A, B,
- * C." sentence expanded into its own labeled list — so a dropdown's choices
- * are actually scannable instead of buried in running text. Speech itself is
- * unaffected; this only changes what's rendered. */
+ * instead of a single dense paragraph. Speech itself is unaffected; this
+ * only changes what's rendered. */
 function formatSpokenMessage(text: string): MessageLine[] {
   if (!text.trim()) return [];
-
-  const sentences = text
+  return text
     .split(/(?<=[.!?])\s+(?=["A-Z0-9])/)
     .map((s) => s.trim())
-    .filter(Boolean);
-
-  const lines: MessageLine[] = [];
-  for (const sentence of sentences) {
-    const optionsMatch = sentence.match(/^Your options are:\s*(.+?)\.?$/i);
-    if (optionsMatch) {
-      lines.push({ text: "Your options are:", kind: "sentence" });
-      optionsMatch[1]
-        .replace(/,?\s+or\s+/i, ", ")
-        .split(",")
-        .map((o) => o.trim())
-        .filter(Boolean)
-        .forEach((opt) => lines.push({ text: opt, kind: "option" }));
-    } else {
-      lines.push({ text: sentence, kind: "sentence" });
-    }
-  }
-  return lines;
+    .filter(Boolean)
+    .map((sentence) => ({ text: sentence, kind: "sentence" as const }));
 }
 
 /** Chrome/Safari block audio.play() without a real click preceding it —
  * calling this from inside the "Start" button's onClick unlocks autoplay
- * for the rest of the tab, so later programmatic TTS playback isn't silently
- * blocked (which otherwise looks exactly like "it isn't reading anything"). */
+ * for the rest of the tab, so the agent's TTS playback isn't silently
+ * blocked (which otherwise looks exactly like "it isn't saying anything"). */
 function unlockAudioPlayback() {
   try {
     const a = new Audio();
@@ -253,14 +132,25 @@ function unlockAudioPlayback() {
   }
 }
 
-export function VoiceExperience({
+/** useConversation() needs a ConversationProvider ancestor — colocated here
+ * rather than at the page level since this is the only place it's used. */
+export function VoiceExperience(props: { form: FormDefinition; resumeEntry?: Entry }) {
+  return (
+    <ConversationProvider>
+      <VoiceExperienceInner {...props} />
+    </ConversationProvider>
+  );
+}
+
+function VoiceExperienceInner({
   form,
   resumeEntry,
 }: {
   form: FormDefinition;
   /** When set, this is a previously saved draft/in-progress entry being
    * continued rather than a fresh one — its answers pre-fill the form and
-   * the conversation skips straight to the first question still unanswered. */
+   * the agent is told (via the prompt) to skip straight to the first
+   * unanswered field. */
   resumeEntry?: Entry;
 }) {
   const router = useRouter();
@@ -273,37 +163,33 @@ export function VoiceExperience({
 
   /** Persists whatever's been answered so far as an in-progress entry and
    * exits — the entry shows up in Entries with a "Resume" action that
-   * reopens this exact session and picks up on the first unanswered field.
-   * Takes the answers explicitly rather than reading `answers` state
-   * directly, since the long-running conversation/review effects only ever
-   * see the snapshot from when they started — this always gets whatever's
-   * actually current, whether called from a button click or from inside
-   * one of those effects (via localRef.current / answersRef.current). */
-  function saveDraftAndExit(currentAnswers: AnswerMap) {
-    const entry = buildEntry({
-      id: entryIdRef.current,
-      form,
-      answers: currentAnswers,
-      status: "in_progress",
-      createdAt: createdAtRef.current,
-      previous: resumeEntry,
-    });
-    upsertEntry(entry);
-    router.push("/entries");
-  }
+   * reopens this exact session. Takes the answers explicitly rather than
+   * reading `answers` state directly, since the client tool closures only
+   * ever see the ref snapshot from when the session started, not a fresh
+   * render each call. */
+  const saveDraftAndExit = useCallback(
+    (currentAnswers: AnswerMap) => {
+      const entry = buildEntry({
+        id: entryIdRef.current,
+        form,
+        answers: currentAnswers,
+        status: "in_progress",
+        createdAt: createdAtRef.current,
+        previous: resumeEntry,
+      });
+      upsertEntry(entry);
+      router.push("/entries");
+    },
+    [form, resumeEntry, upsertEntry, router]
+  );
 
   const [started, setStarted] = useState(false);
   const [phase, setPhase] = useState<"conversation" | "review" | "submitting">(
     "conversation"
   );
-  const [orbState, setOrbState] = useState<OrbState>("speaking");
   const [assistantText, setAssistantText] = useState("");
-  const [activeField, setActiveField] = useState<string | null>(null);
-  // Briefly flashes a field in the form preview when a correction lands on
-  // it — separate from `activeField` (the question currently being asked)
-  // since a correction can target a totally different, already-visited
-  // field and shouldn't permanently steal the highlight from where the
-  // conversation actually is.
+  // Briefly flashes a field in the form preview when an answer/correction
+  // lands on it.
   const [highlightField, setHighlightField] = useState<string | null>(null);
   const [answers, setAnswers] = useState<AnswerMap>(() => {
     if (!resumeEntry) return {};
@@ -313,547 +199,181 @@ export function VoiceExperience({
     }
     return map;
   });
-  const [paused, setPaused] = useState(false);
-  const [micError, setMicError] = useState<string | null>(null);
-  const [apiError, setApiError] = useState<string | null>(null);
+  // Every field the agent has asked about (answered or skipped) this
+  // session — once every currently-visible question is in here, the form's
+  // done and it's time to move to review. Mirrors the old
+  // visitedFieldNamesRef, just driven by tool calls instead of a manual
+  // question loop.
+  const [visitedFieldNames, setVisitedFieldNames] = useState<Set<string>>(
+    () => new Set(Object.keys(answers))
+  );
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [language, setLanguage] = useState<LanguageCode>("en");
   const [voiceGender, setVoiceGenderState] = useState<VoiceGender>(() => getVoiceGender());
 
-  const pausedRef = useRef(paused);
+  // Client tool closures run inside the SDK's own event handling, not a
+  // React render — they need refs to see current state, the same pattern
+  // this component has always used for its long-running async work.
+  const answersRef = useRef(answers);
   useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
-
-  // Read from effects without re-running them whenever the user switches
-  // language mid-session.
-  const languageRef = useRef(language);
-  useEffect(() => {
-    languageRef.current = language;
-  }, [language]);
-
-  // Same idea for the spoken voice — persists across sessions (device-local)
-  // and applies immediately if switched mid-conversation.
+    answersRef.current = answers;
+  }, [answers]);
   const voiceGenderRef = useRef(voiceGender);
   useEffect(() => {
     voiceGenderRef.current = voiceGender;
     setVoiceGender(voiceGender);
   }, [voiceGender]);
 
-  // The review-phase loop below runs once and then keeps listening
-  // indefinitely — it needs to see each field update as it happens, not the
-  // stale snapshot captured when the effect first ran.
-  const answersRef = useRef(answers);
-  useEffect(() => {
-    answersRef.current = answers;
-  }, [answers]);
-
-  // Clears a highlightField flash after a couple seconds — tracked so a
-  // second correction landing before the first flash finishes resets the
-  // timer instead of the two racing to clear each other early.
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function flashHighlight(fieldName: string) {
+  const flashHighlight = useCallback((fieldName: string) => {
     setHighlightField(fieldName);
     if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
     highlightTimeoutRef.current = setTimeout(() => setHighlightField(null), 2200);
-  }
+  }, []);
   useEffect(() => {
     return () => {
       if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
     };
   }, []);
 
-  // One mic permission grant, shared across the question loop AND the
-  // review-phase "say submit" listener — kept alive between the two instead
-  // of being re-acquired, and stopped only when the whole screen unmounts.
-  const micRef = useRef<MicSession | null>(null);
-  if (!micRef.current) micRef.current = new MicSession();
-  useEffect(() => {
-    return () => {
-      micRef.current?.stop();
-    };
+  const markVisited = useCallback((fieldName: string) => {
+    setVisitedFieldNames((prev) => {
+      if (prev.has(fieldName)) return prev;
+      const next = new Set(prev);
+      next.add(fieldName);
+      return next;
+    });
   }, []);
 
-  // Not user-configurable. "low" turned out to be too strict for real use:
-  // the mic only stops recording once its own energy/duration gate decides
-  // the user has spoken and gone quiet again — if a genuine (but quieter,
-  // shorter, or slightly muffled) answer never clears that bar, the
-  // recording just keeps running with no feedback, the user repeats
-  // themselves thinking it wasn't heard, and the eventual clip — one
-  // continuous recording spanning both attempts — gets transcribed with the
-  // answer duplicated in it. Most of what "low" was chasing (background
-  // voices triggering false interruptions) turned out to be a stale-timer
-  // bug in the barge-in debounce, not a threshold problem — that's fixed
-  // separately now, so "medium" is a safer default: still debounced against
-  // brief noise, but far less likely to miss the user's own voice.
-  const sensitivityRef = useRef(getSensitivityConfig("medium"));
-
-  useEffect(() => {
-    if (!started) return;
-
-    const cancelledRef = { current: false };
-    const mic = micRef.current!;
-    const sensitivity = sensitivityRef.current;
-    const allQuestions = getAllQuestions(form);
-
-    // Mutable, shared between askQuestion (reads it to spot corrections to
-    // earlier fields) and run() (writes it as each question gets answered).
-    // A ref rather than a `let` because askQuestion is defined before run()
-    // but needs to see answers as they land, not a stale empty snapshot.
-    // Seeded from `answers` so a resumed draft starts with what was already
-    // captured last time, instead of asking everything all over again.
-    const localRef: { current: AnswerMap } = { current: { ...answers } };
-
-    // Every field the user has already been asked about, whether they
-    // answered it, skipped it (ran out of retries), or it's the one being
-    // asked right now — this is what makes a field a valid target for
-    // "repeat that" / "change my answer to..." mid-conversation. Fields not
-    // reached yet aren't referenceable (nothing to repeat or correct).
-    const visitedFieldNamesRef: { current: Set<string> } = {
-      current: new Set(Object.keys(answers)),
-    };
-
-    const captureOpts = {
-      speechThreshold: sensitivity.speechThreshold,
-      voiceBandMinRatio: sensitivity.voiceBandMinRatio,
-      minSpeechMs: sensitivity.minSpeechMs,
-    };
-
-    async function speak(text: string): Promise<void> {
-      setOrbState("speaking");
-      setAssistantText(text);
-      await isPaused(pausedRef, cancelledRef);
-      if (cancelledRef.current) return;
-      // Mic is left alone during playback — capturing while the assistant
-      // is also making sound meant its own TTS echo (which browsers don't
-      // reliably cancel out for a plain <audio> element, only for WebRTC
-      // loopback) kept satisfying the "user is speaking" check on its own,
-      // triggering a false "let me finish" on essentially every question.
-      // No barge-in either: the assistant always finishes asking in full.
-      await speakText(text, { voice: voiceGenderRef.current });
-    }
-
-    async function listenAndTranscribe(): Promise<string> {
-      setOrbState("listening");
-      await isPaused(pausedRef, cancelledRef);
-      if (cancelledRef.current) return "";
-      // Always a clean, fresh capture that only starts once the assistant
-      // has genuinely gone quiet — nothing of its own voice in it to
-      // mistake for the user, and no earlier stale state to trip over.
-      const clip = await mic.waitForCapture(captureOpts);
-      if (cancelledRef.current) return "";
-      setOrbState("thinking");
-      return transcribeAudio(clip, languageRef.current); // throws on failure
-    }
-
-    async function askQuestion(q: FormQuestion): Promise<string | boolean | null> {
-      // Each attempt normally re-reads questionPrompt(q, attempt), which
-      // prefixes retries with "Sorry, I didn't catch that" — appropriate
-      // when nothing was heard. After a correction to an earlier answer,
-      // though, the agent heard them just fine; this overrides the next
-      // prompt with a natural "let's continue" instead of implying it
-      // failed to listen.
-      let overridePrompt: string | null = null;
-
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (cancelledRef.current) return null;
-
-        await speak(overridePrompt ?? questionPrompt(q, attempt));
-        overridePrompt = null;
-        if (cancelledRef.current) return null;
-
-        const transcript = await listenAndTranscribe();
-        if (cancelledRef.current) return null;
-
-        if (!transcript.trim()) continue; // genuine silence — repeat the question
-
-        if (isSaveDraftCommand(transcript)) {
-          // A real, possibly urgent request to step away — reassure them
-          // first, then actually save and leave, not just acknowledge it.
-          await speak(
-            "Of course — please don't worry about it. I've saved everything as a draft, so you can come back and pick up right where you left off whenever you're ready."
-          );
-          saveDraftAndExit(localRef.current);
-          cancelledRef.current = true; // stop the rest of this run — we've already navigated away
-          return null;
+  const conversation = useConversation({
+    onMessage: ({ message, role }) => {
+      if (role === "agent") setAssistantText(message);
+    },
+    onError: (message) => {
+      console.error("[voice] agent session error", message);
+      setSessionError(`${message} — you can still fill out the form manually on the right.`);
+    },
+    onDisconnect: (details) => {
+      if (details.reason === "error") {
+        setSessionError(`${details.message} — you can still fill out the form manually on the right.`);
+      }
+    },
+    clientTools: {
+      record_answer: async (params: { field_name?: string; value?: string }) => {
+        const fieldName = params.field_name;
+        const q = fieldName ? findQuestion(form, fieldName) : undefined;
+        if (!fieldName || !q) {
+          return "Unknown field_name — it must exactly match one of the field names given in your instructions.";
         }
-
-        if (isSkipCommand(transcript)) {
-          if (!q.required) {
-            await speak("No problem, skipping that one.");
-            return null; // leave unanswered, same as any other gap
-          }
-          // Required fields can't be skipped by voice — ask normally again
-          // rather than silently failing or arguing with the user.
-          overridePrompt = `No worries, but this one's required, so I'll just need an answer for it. ${questionPrompt(q, 0)}`;
-          attempt--; // asking to skip isn't a failed attempt at answering
-          continue;
+        const result = validateAnswer(q, params.value ?? "");
+        markVisited(fieldName);
+        if (!result.ok) return result.reason;
+        setAnswers((prev) => ({ ...prev, [fieldName]: result.value }));
+        flashHighlight(fieldName);
+        return "Recorded.";
+      },
+      skip_field: async (params: { field_name?: string }) => {
+        const fieldName = params.field_name;
+        const q = fieldName ? findQuestion(form, fieldName) : undefined;
+        if (!fieldName || !q) {
+          return "Unknown field_name — it must exactly match one of the field names given in your instructions.";
         }
-
-        const interpretation = await interpretAnswer({
-          question: q.questionText,
-          fieldType: q.fieldType,
-          options: q.options?.map((o) => o.value),
-          transcript,
+        const result = canSkip(q);
+        markVisited(fieldName);
+        if (!result.ok) return result.reason;
+        return "Skipped.";
+      },
+      save_draft_and_exit: async () => {
+        saveDraftAndExit(answersRef.current);
+        return "Saved as a draft.";
+      },
+      submit_form: async () => {
+        setPhase("submitting");
+        const entry = buildEntry({
+          id: entryIdRef.current,
+          form,
+          answers: answersRef.current,
+          status: "submitted",
+          createdAt: createdAtRef.current,
+          previous: resumeEntry,
         });
+        upsertEntry(entry);
+        router.push(`/entries/${entry.id}`);
+        return "Submitted.";
+      },
+    },
+  });
 
-        if (interpretation.wants_explanation && interpretation.explanation) {
-          // Asking what the question/a term means, or for an example — a
-          // legitimate request about the form itself, not a bluff risk,
-          // since the explanation is grounded in the question's own data.
-          // Answer it, then pick the same question back up.
-          overridePrompt = `${interpretation.explanation} ${questionPrompt(q, 0)}`;
-          attempt--; // asking for clarification isn't a failed attempt at answering
-          continue;
-        }
+  const orbState: OrbState =
+    phase === "submitting"
+      ? "idle"
+      : !started
+        ? "idle"
+        : conversation.status === "connecting"
+          ? "thinking"
+          : conversation.mode === "speaking"
+            ? "speaking"
+            : "listening";
 
-        if (interpretation.off_topic) {
-          // Doesn't answer the current question — but before assuming the
-          // user has wandered off-topic, check whether they're actually
-          // referring to a question already visited (this one, an earlier
-          // one they answered, or an earlier one that got skipped): either
-          // correcting its value ("actually, change my email to...") or
-          // asking to hear it again ("what were the options for employment
-          // status again?"). Either way, handle it and pick back up on the
-          // current question — don't make them wait for the review screen.
-          const visitedFieldNames = visitedFieldNamesRef.current;
-          if (visitedFieldNames.size > 0) {
-            const referenceFields = allQuestions
-              .filter((aq) => visitedFieldNames.has(aq.fieldName))
-              .map((aq) => ({
-                fieldName: aq.fieldName,
-                label: aq.questionText,
-                fieldType: aq.fieldType,
-                options: aq.options?.map((o) => o.value),
-                currentValue: localRef.current[aq.fieldName],
-              }));
-            const command = await interpretReviewCommand({ transcript, fields: referenceFields }).catch(
-              () => null
-            );
-
-            if (
-              command?.intent === "update_field" &&
-              command.field_name &&
-              visitedFieldNames.has(command.field_name)
-            ) {
-              const fieldName = command.field_name;
-              localRef.current = { ...localRef.current, [fieldName]: command.value ?? "" };
-              setAnswers((prev) => ({ ...prev, [fieldName]: command.value ?? "" }));
-              flashHighlight(fieldName); // show exactly which field just changed
-              // One natural line — confirm the change, then pick the
-              // current question back up — rather than a robotic "sorry I
-              // didn't catch that" retry.
-              overridePrompt = `${command.spoken_reply || "Got it, updated."} Let's continue — ${questionPrompt(q, 0)}`;
-              attempt--; // a correction isn't a failed attempt at this question — don't burn a retry on it
-              continue;
-            }
-
-            if (
-              command?.intent === "repeat_field" &&
-              command.field_name &&
-              visitedFieldNames.has(command.field_name)
-            ) {
-              const target = allQuestions.find((aq) => aq.fieldName === command.field_name);
-              if (target && target.fieldName === q.fieldName) {
-                // Repeating the very question in progress — just re-ask it,
-                // including its options, and keep listening for its answer.
-                overridePrompt = questionPrompt(q, 0);
-                attempt--;
-                continue;
-              }
-              if (target) {
-                // A different, already-visited question (answered or
-                // skipped) — read it back with its real options (not
-                // whatever the model might recall) and give the user a
-                // chance to answer it right now, then resume where we left
-                // off. Move the highlight over to it while it's actually
-                // being asked, since it's no longer the current question.
-                setActiveField(target.fieldName);
-                await speak(`Sure — ${questionPrompt(target, 0)}`);
-                if (cancelledRef.current) return null;
-                const targetTranscript = await listenAndTranscribe();
-                if (cancelledRef.current) return null;
-
-                if (targetTranscript.trim()) {
-                  const targetInterpretation = await interpretAnswer({
-                    question: target.questionText,
-                    fieldType: target.fieldType,
-                    options: target.options?.map((o) => o.value),
-                    transcript: targetTranscript,
-                  }).catch(() => null);
-                  const targetDateIssue =
-                    targetInterpretation &&
-                    target.fieldType === "date" &&
-                    typeof targetInterpretation.value === "string"
-                      ? dateConstraintMessage(target.dateConstraint, targetInterpretation.value)
-                      : null;
-                  if (
-                    targetInterpretation &&
-                    !targetInterpretation.off_topic &&
-                    !targetInterpretation.needs_clarification &&
-                    !targetDateIssue
-                  ) {
-                    const targetValue = normalizeDistanceValue(
-                      targetInterpretation.value,
-                      targetInterpretation.stated_distance_unit
-                    );
-                    localRef.current = {
-                      ...localRef.current,
-                      [target.fieldName]: targetValue,
-                    };
-                    setAnswers((prev) => ({ ...prev, [target.fieldName]: targetValue }));
-                    flashHighlight(target.fieldName);
-                  }
-                }
-
-                setActiveField(q.fieldName); // back to the question actually in progress
-                overridePrompt = `Let's continue — ${questionPrompt(q, 0)}`;
-                attempt--;
-                continue;
-              }
-            }
-          }
-
-          // Genuinely off-topic — redirect back to the form without trying
-          // to answer whatever they said. Guessing at things outside the
-          // form risks speaking made-up/unreliable information, so this
-          // stays a plain, honest redirect rather than a bluffed answer —
-          // kept warm, not a scold, since going off-script is completely
-          // normal in a real conversation.
-          overridePrompt = `No worries — let's get back to the form. ${questionPrompt(q, 0)}`;
-          attempt--; // an off-topic remark isn't a failed attempt at this question
-          continue;
-        }
-
-        if (q.fieldType === "date" && typeof interpretation.value === "string") {
-          const dateIssue = dateConstraintMessage(q.dateConstraint, interpretation.value);
-          if (dateIssue) {
-            overridePrompt = `${dateIssue} ${questionPrompt(q, 0)}`;
-            attempt--; // a sensible date constraint isn't a failed attempt at answering
-            continue;
-          }
-        }
-
-        if (!interpretation.needs_clarification) {
-          return normalizeDistanceValue(interpretation.value, interpretation.stated_distance_unit);
-        }
-
-        // Low-confidence / ambiguous — confirm before committing.
-        await speak(interpretation.clarification_question ?? "Is that correct?");
-        if (cancelledRef.current) return null;
-        const confirmTranscript = await listenAndTranscribe();
-        if (cancelledRef.current) return null;
-
-        if (confirmTranscript.trim() && !NEGATIVE_RE.test(confirmTranscript)) {
-          return normalizeDistanceValue(interpretation.value, interpretation.stated_distance_unit);
-        }
-        // treated as "no" (or unheard) — loop back and re-ask the question
-      }
-      return null; // gave up after MAX_RETRIES — leave unanswered, move on
-    }
-
-    async function run() {
-      try {
-        await mic.init();
-      } catch {
-        setMicError(
-          "Microphone access was denied or unavailable. You can still fill out the form manually on the right."
-        );
-        setOrbState("idle");
-        return;
-      }
-
-      try {
-        for (const q of allQuestions) {
-          if (cancelledRef.current) break;
-          if (
-            q.conditional &&
-            localRef.current[q.conditional.dependsOnFieldName] !== q.conditional.equals
-          ) {
-            continue;
-          }
-          // Already answered — either earlier this session, or carried over
-          // from a resumed draft. Don't ask it again; this is what makes
-          // "continue where I left off" actually skip straight to the first
-          // genuinely unanswered field instead of starting over.
-          const existing = localRef.current[q.fieldName];
-          if (existing !== undefined && existing !== "") {
-            visitedFieldNamesRef.current.add(q.fieldName);
-            continue;
-          }
-
-          setActiveField(q.fieldName);
-          visitedFieldNamesRef.current.add(q.fieldName); // referenceable for "repeat"/"change" from here on, even if it ends up skipped
-          const value = await askQuestion(q);
-          if (cancelledRef.current) break;
-
-          if (value !== null) {
-            localRef.current = { ...localRef.current, [q.fieldName]: value };
-            setAnswers((prev) => ({ ...prev, [q.fieldName]: value }));
-          }
-        }
-      } catch (err) {
-        console.error("[voice] pipeline error", err);
-        const reason = err instanceof Error ? err.message : String(err);
-        setApiError(`${reason} — you can still fill out the form manually on the right.`);
-        setOrbState("idle");
-        mic.stop(); // hard failure — no more voice interaction this session
-        return;
-      }
-
-      if (!cancelledRef.current) {
-        setActiveField(null);
-        setOrbState("idle");
-        setAssistantText("All done — let's review your answers.");
-        setPhase("review"); // mic stays live — the review-phase effect below reuses it
-      }
-    }
-
-    run();
-    return () => {
-      cancelledRef.current = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, form.id]);
-
-  // Review phase: keep the mic responsive for both "submit" AND corrections
-  // ("change my phone number to...") — per scope.md's voice-command flow,
-  // and so a change request gets a real answer instead of being silently
-  // dropped for not matching a submit phrase.
-  useEffect(() => {
-    if (!started || phase !== "review" || micError || apiError) return;
-
-    const cancelledRef = { current: false };
-    const mic = micRef.current!;
-    const reviewQuestions = getAllQuestions(form);
-    const sensitivity = sensitivityRef.current;
-    const captureOpts = {
-      speechThreshold: sensitivity.speechThreshold,
-      voiceBandMinRatio: sensitivity.voiceBandMinRatio,
-      minSpeechMs: sensitivity.minSpeechMs,
-    };
-
-    async function speak(text: string) {
-      setOrbState("speaking");
-      setAssistantText(text);
-      await isPaused(pausedRef, cancelledRef);
-      if (cancelledRef.current) return;
-      // Mic stays untouched during playback — see the matching comment in
-      // the conversation-phase speak() for why (TTS echo was masquerading
-      // as the user talking, firing "let me finish" on nearly every turn).
-      await speakText(text, { voice: voiceGenderRef.current }).catch(() => {});
-    }
-
-    async function run() {
-      try {
-        await mic.init();
-      } catch {
-        return; // mic never worked — the Confirm & Submit button still works
-      }
-      if (cancelledRef.current) return;
-
-      await speak("All done. Say submit when you're ready, or ask to change any field.");
-      if (cancelledRef.current) return;
-
-      while (!cancelledRef.current) {
-        setOrbState("listening");
-        await isPaused(pausedRef, cancelledRef);
-        if (cancelledRef.current) return;
-
-        const clip = await mic.waitForCapture(captureOpts);
-        if (cancelledRef.current) return;
-        if (clip.size < 4000) continue; // essentially silence — keep waiting
-
-        setOrbState("thinking");
-        const transcript = await transcribeAudio(clip, languageRef.current).catch(() => "");
-        if (cancelledRef.current) return;
-        if (!transcript.trim()) continue;
-
-        if (isSaveDraftCommand(transcript)) {
-          await speak(
-            "Of course — please don't worry about it. I've saved everything as a draft, so you can come back and pick up right where you left off whenever you're ready."
-          );
-          saveDraftAndExit(answersRef.current);
-          cancelledRef.current = true;
-          return;
-        }
-
-        const fields = reviewQuestions.map((q) => ({
-          fieldName: q.fieldName,
-          label: q.questionText,
-          fieldType: q.fieldType,
-          options: q.options?.map((o) => o.value),
-          currentValue: answersRef.current[q.fieldName],
-        }));
-
-        const command = await interpretReviewCommand({ transcript, fields }).catch(() => null);
-
-        if (!command) {
-          // Review-command API hiccup — fall back to a plain submit check
-          // rather than leaving the user's request completely unanswered.
-          if (SUBMIT_INTENT_RE.test(transcript)) {
-            setOrbState("idle");
-            handleSubmit();
-            return;
-          }
-          continue;
-        }
-
-        if (command.intent === "submit") {
-          await speak(command.spoken_reply);
-          if (cancelledRef.current) return;
-          handleSubmit();
-          return;
-        }
-
-        if (
-          command.intent === "update_field" &&
-          command.field_name &&
-          reviewQuestions.some((q) => q.fieldName === command.field_name)
-        ) {
-          setAnswers((prev) => ({ ...prev, [command.field_name as string]: command.value ?? "" }));
-          flashHighlight(command.field_name); // show exactly which field just changed
-        }
-
-        if (command.intent === "repeat_field" && command.field_name) {
-          // Re-read the question with its real options, whether it was
-          // answered or skipped — don't trust the model to restate options
-          // from memory when we have the authoritative list right here.
-          const target = reviewQuestions.find((q) => q.fieldName === command.field_name);
-          if (target) {
-            await speak(questionPrompt(target, 0));
-            if (cancelledRef.current) return;
-            continue;
-          }
-        }
-
-        // update_field confirmation or unclear guidance — either way, respond.
-        await speak(command.spoken_reply);
-        if (cancelledRef.current) return;
-      }
-    }
-
-    run();
-    return () => {
-      cancelledRef.current = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, phase, micError, apiError]);
-
-  // Manual-entry fallback: if voice never worked (mic denied, or the API
-  // routes errored), let the user complete the form by hand and unlock
-  // review once every required visible field is set.
-  useEffect(() => {
-    if ((!micError && !apiError) || phase !== "conversation") return;
-    const allQuestions = getAllQuestions(form);
-    const stillMissing = allQuestions.some((q) => {
-      const visible =
-        !q.conditional || answers[q.conditional.dependsOnFieldName] === q.conditional.equals;
+  // Derived, not effect-driven: once every currently-visible question has
+  // been asked about (answered or skipped), the agent is expected to move
+  // into its own summary/confirm step, so the UI flips to review in step
+  // with that. Computed straight from render-time state (React's own
+  // recommended pattern for "adjust state when derived inputs change")
+  // rather than a useEffect — setPhase only fires while phase is still
+  // "conversation", so this can't loop once it flips.
+  //
+  // The session-error fallback covers the same transition a different way:
+  // if the agent session never worked, let a manual fill-in still unlock
+  // review once every required visible field is set by hand.
+  if (phase === "conversation") {
+    const visible = getAllQuestions(form).filter(
+      (q) => !q.conditional || answers[q.conditional.dependsOnFieldName] === q.conditional.equals
+    );
+    const allVisited = visible.length > 0 && visible.every((q) => visitedFieldNames.has(q.fieldName));
+    const stillMissingRequired = visible.some((q) => {
       const answered = answers[q.fieldName] !== undefined && answers[q.fieldName] !== "";
-      return visible && q.required && !answered;
+      return q.required && !answered;
     });
-    if (!stillMissing) setPhase("review");
+    if (allVisited || (sessionError && !stillMissingRequired)) {
+      setPhase("review");
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      conversation.endSession();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answers, micError, apiError, phase]);
+  }, []);
+
+  async function handleStart() {
+    unlockAudioPlayback();
+    setStarted(true);
+    try {
+      const res = await fetch("/api/voice/agent-session");
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail || body?.error || "Couldn't start a voice session");
+      }
+      const { signedUrl } = await res.json();
+      const voiceId = voiceGenderRef.current === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
+      await conversation.startSession({
+        signedUrl,
+        overrides: {
+          agent: {
+            prompt: { prompt: buildAgentPrompt(form, answersRef.current) },
+            firstMessage: buildFirstMessage(form, answersRef.current),
+            language,
+          },
+          tts: { voiceId },
+        },
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      setSessionError(`${reason} — you can still fill out the form manually on the right.`);
+    }
+  }
 
   const allQuestions = getAllQuestions(form);
   const visibleCount = allQuestions.filter(
@@ -886,18 +406,14 @@ export function VoiceExperience({
     router.push(`/entries/${entry.id}`);
   }
 
-  const error = micError ?? apiError;
-
   const statusLabel =
     phase === "review"
       ? "Ready for review"
-      : orbState === "speaking"
-        ? "Speaking…"
-        : orbState === "listening"
-          ? "Listening…"
-          : orbState === "thinking"
-            ? "Thinking…"
-            : "Idle";
+      : conversation.status === "connecting"
+        ? "Connecting…"
+        : conversation.mode === "speaking"
+          ? "Speaking…"
+          : "Listening…";
 
   return (
     <div className="flex h-dvh w-full flex-col gap-3 bg-canvas p-3">
@@ -947,10 +463,7 @@ export function VoiceExperience({
                 </p>
               </div>
               <button
-                onClick={() => {
-                  unlockAudioPlayback();
-                  setStarted(true);
-                }}
+                onClick={handleStart}
                 className="flex items-center gap-2 rounded-full bg-teal px-6 py-3 text-sm font-semibold text-teal-foreground transition-transform active:scale-[0.98]"
               >
                 <Play className="size-4" />
@@ -959,19 +472,19 @@ export function VoiceExperience({
             </div>
           ) : (
             <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-8 py-10">
-              {error ? (
+              {sessionError ? (
                 <div className="flex max-w-sm flex-col items-center gap-3 text-center">
                   <span className="flex size-14 items-center justify-center rounded-full bg-warning/20 text-warning">
                     <AlertTriangle className="size-6" />
                   </span>
-                  <p className="text-sm text-white/70">{error}</p>
+                  <p className="text-sm text-white/70">{sessionError}</p>
                 </div>
               ) : (
-                <VoiceOrb state={phase === "submitting" ? "idle" : orbState} size={196} />
+                <VoiceOrb state={orbState} size={196} />
               )}
 
               <div className="flex max-w-md flex-col items-center gap-3 text-center">
-                {!error && (
+                {!sessionError && (
                   <div key={assistantText} className="animate-fade-in-up flex flex-col items-center gap-1.5">
                     {formatSpokenMessage(assistantText).map((line, i) =>
                       line.kind === "option" ? (
@@ -991,16 +504,16 @@ export function VoiceExperience({
                 )}
               </div>
 
-              {!error && (
+              {!sessionError && (
                 <span className="text-xs font-medium uppercase tracking-wide text-white/40">
-                  {paused ? "Paused" : statusLabel}
+                  {conversation.isMuted ? "Muted" : statusLabel}
                 </span>
               )}
             </div>
           )}
 
           {/* Control bar */}
-          {started && !error && (
+          {started && !sessionError && (
             <div className="relative flex items-center justify-center gap-3 pb-8">
               <button
                 onClick={() => router.push("/entries")}
@@ -1011,14 +524,14 @@ export function VoiceExperience({
                 <X className="size-[18px]" />
               </button>
               <button
-                onClick={() => setPaused((p) => !p)}
+                onClick={() => conversation.setMuted(!conversation.isMuted)}
                 className={cn(
                   "flex size-14 items-center justify-center rounded-full transition-colors",
-                  paused ? "bg-white/15 text-white" : "bg-teal text-teal-foreground"
+                  conversation.isMuted ? "bg-white/15 text-white" : "bg-teal text-teal-foreground"
                 )}
-                aria-label={paused ? "Resume microphone" : "Mute microphone"}
+                aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
               >
-                {paused ? <MicOff className="size-6" /> : <Mic className="size-6" />}
+                {conversation.isMuted ? <MicOff className="size-6" /> : <Mic className="size-6" />}
               </button>
               <Popover>
                 <PopoverTrigger asChild>
@@ -1051,8 +564,7 @@ export function VoiceExperience({
                         </SelectContent>
                       </Select>
                       <p className="text-[11px] text-muted-foreground">
-                        Set to English by default — switch if you'd rather answer in another
-                        language.
+                        Applies to the next session — start again after changing this mid-call.
                       </p>
                     </div>
                     <div className="flex flex-col gap-1.5">
@@ -1072,7 +584,7 @@ export function VoiceExperience({
                         </SelectContent>
                       </Select>
                       <p className="text-[11px] text-muted-foreground">
-                        Applies to the next question it asks, and is remembered on this device.
+                        Applies to the next session, and is remembered on this device.
                       </p>
                     </div>
                   </div>
@@ -1098,15 +610,15 @@ export function VoiceExperience({
             <LiveFormPanel
               form={form}
               answers={answers}
-              activeFieldName={highlightField ?? (phase === "conversation" ? activeField : null)}
-              activeLabel={highlightField ? "updated" : "listening"}
+              activeFieldName={highlightField}
+              activeLabel="updated"
               onFieldChange={handleManualChange}
             />
           </div>
 
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/60 px-6 py-4">
             <p className="text-xs text-muted-foreground">
-              You can edit any field manually, or just say "submit" when ready.
+              You can edit any field manually, or just say &quot;submit&quot; when ready.
             </p>
             <div className="flex items-center gap-2">
               {/* Always visible (not just once something's answered) so it's
@@ -1143,3 +655,4 @@ export function VoiceExperience({
     </div>
   );
 }
+

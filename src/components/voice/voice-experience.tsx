@@ -41,6 +41,7 @@ import { getAssistantName, getDailyOpeningQuote } from "@/lib/voice-session-open
 import { unlockAudioPlayback } from "@/lib/audio-unlock";
 import { validateAnswer, canSkip } from "@/lib/voice-agent-validate";
 import { markFormSubmitted } from "@/lib/submission-announcement";
+import { performLogout } from "@/lib/logout";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
@@ -387,6 +388,28 @@ function VoiceExperienceInner({
         // someone just didn't want to continue.
         router.push("/entries");
         return "Discarded.";
+      },
+      // Used for both an explicit spoken "log me out" (confirmed by the
+      // prompt first) and the forced idle-silence timeout below — either
+      // way, whatever's been answered so far is preserved as a draft
+      // first, same as save_draft_and_exit, just followed by an actual
+      // application logout instead of a plain return to /entries.
+      logout: async () => {
+        if (Object.keys(answersRef.current).length > 0) {
+          const entry = buildEntry({
+            id: entryIdRef.current,
+            form,
+            answers: answersRef.current,
+            status: "in_progress",
+            createdAt: createdAtRef.current,
+            previous: resumeEntry,
+          });
+          upsertEntry(entry);
+        }
+        await performLogout();
+        router.push("/login");
+        router.refresh();
+        return "Logging out now.";
       },
       submit_form: async () => {
         setPhase("submitting");

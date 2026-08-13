@@ -221,6 +221,9 @@ interface FormBuilderDraftStore {
   setSectionTitleByVoice: (identifier: string, title: string) => ActionResult;
   /** Swaps a section with its neighbor in the given direction. */
   moveSectionByVoice: (identifier: string, direction: MoveDirection) => ActionResult;
+  /** Deletes a section and all its questions — caller must confirm with
+   * the user first, this doesn't ask again. */
+  removeSectionByVoice: (identifier: string) => ActionResult;
   /** Adds or removes a field from the Entries table column picker,
    * matched by field name or its question label. */
   toggleEntryColumnByVoice: (fieldNameOrLabel: string) => ActionResult;
@@ -523,6 +526,30 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
     return result ?? { ok: false, message: "Nothing changed." };
   }, []);
 
+  /** Deletes a whole section and every question in it — the caller (the
+   * voice tool handler) is responsible for having already confirmed with
+   * the user before calling this; the store itself doesn't ask twice. A
+   * form always needs at least one section, so removing the last one is
+   * refused rather than leaving the draft with none. */
+  const removeSectionByVoice = useCallback((identifier: string): ActionResult => {
+    let result: ActionResult | null = null;
+    setSections((prev) => {
+      if (prev.length <= 1) {
+        result = { ok: false, message: "That's the only section — a form needs at least one." };
+        return prev;
+      }
+      const idx = findSectionIndex(prev, identifier);
+      if (idx === -1) {
+        result = { ok: false, message: `Couldn't find a section matching "${identifier}".` };
+        return prev;
+      }
+      const removedTitle = prev[idx].title;
+      result = { ok: true, message: `Removed the "${removedTitle}" section.` };
+      return prev.filter((_, i) => i !== idx);
+    });
+    return result ?? { ok: false, message: "Nothing changed." };
+  }, []);
+
   const toggleEntryColumnByVoice = useCallback(
     (fieldNameOrLabel: string): ActionResult => {
       const needle = fieldNameOrLabel.trim().toLowerCase();
@@ -575,6 +602,7 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
       addSectionByVoice,
       setSectionTitleByVoice,
       moveSectionByVoice,
+      removeSectionByVoice,
       toggleEntryColumnByVoice,
     }),
     [
@@ -595,6 +623,7 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
       addSectionByVoice,
       setSectionTitleByVoice,
       moveSectionByVoice,
+      removeSectionByVoice,
       toggleEntryColumnByVoice,
     ]
   );

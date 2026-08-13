@@ -130,18 +130,19 @@ QUESTIONS, IN ORDER:
 ${questionBlocks || "(Every question has already been answered — go straight to summarizing and asking the user to confirm submission.)"}`;
 }
 
-/** The agent's opening line for a session: a self-introduction plus a
- * fresh quote (motivational, on the very first session of the day —
- * see getDailyOpeningQuote), then a time-of-day greeting and well-wish,
- * then (for a fresh session) a one-line heads-up on what's about to
- * happen, then straight into the first question — no dead air waiting for
- * a generic hello before anything useful happens. Fully authored here
- * rather than left to the agent's own improvisation, same reasoning as the
- * rest of this function: deterministic beats "probably fine". */
+/** The agent's opening line for a session: a self-introduction plus (only
+ * on the very first voice session of the calendar day — see
+ * getDailyOpeningQuote) a motivational quote, then a time-of-day greeting
+ * and well-wish, then (for a fresh session) a one-line heads-up on what's
+ * about to happen, then straight into the first question — no dead air
+ * waiting for a generic hello before anything useful happens. Fully
+ * authored here rather than left to the agent's own improvisation, same
+ * reasoning as the rest of this function: deterministic beats "probably
+ * fine". */
 export function buildFirstMessage(
   form: FormDefinition,
   answers: AnswerMap = {},
-  opening: { assistantName: string; quote: string } = { assistantName: "Ava", quote: "" }
+  opening: { assistantName: string; quote: string | null } = { assistantName: "Ava", quote: null }
 ): string {
   const next = getAllQuestions(form).find((q) => {
     const value = answers[q.fieldName];
@@ -152,7 +153,7 @@ export function buildFirstMessage(
     return true;
   });
   const greetingWord = timeOfDayGreeting();
-  const selfIntro = `Hi, I'm ${opening.assistantName}. ${opening.quote}`.trim();
+  const selfIntro = `Hi, I'm ${opening.assistantName}.${opening.quote ? ` ${opening.quote}` : ""}`;
   if (!next) {
     return `${selfIntro} ${greetingWord}, and welcome back — hope you're doing well! Looks like everything's already answered, so let's go over it together before you submit.`;
   }

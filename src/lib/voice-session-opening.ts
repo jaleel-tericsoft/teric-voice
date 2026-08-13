@@ -1,12 +1,15 @@
-// Powers the "who's talking + something fresh to start the day" opening
-// line, spoken once at the start of every voice session (see
-// buildFirstMessage in voice-agent-prompt.ts). Two pieces:
+// Powers the "who's talking + a fresh quote to start the day" opening
+// line, spoken once at the start of a voice session (see buildFirstMessage
+// in voice-agent-prompt.ts and buildAmbientFirstMessage in
+// ambient-agent-prompt.ts). Two pieces:
 //   1. A name for each voice persona, so the assistant can introduce
 //      itself instead of staying anonymous.
-//   2. A quote that's motivational the very first time someone opens the
-//      app in a day, and just "fresh" (not repeated) on every session
-//      after that — tracked in localStorage, same convention as the other
-//      client-only preferences in this app (see voice-client.ts).
+//   2. A motivational quote — said once, on the very first voice session
+//      of the calendar day (almost always the ambient widget's own
+//      opening greeting right after login), and never repeated again that
+//      day regardless of how many more sessions happen — tracked in
+//      localStorage, same convention as the other client-only preferences
+//      in this app (see voice-client.ts).
 
 import type { VoiceGender } from "@/lib/voice-client";
 
@@ -42,30 +45,13 @@ const MOTIVATIONAL_QUOTES = [
   "Every entry finished is one less thing on your mind.",
 ];
 
-const GENERAL_QUOTES = [
-  "Simple is often the smartest way to get things done.",
-  "Clarity beats perfection every time.",
-  "The best time to start was earlier — the next best time is now.",
-  "Good things happen when you keep showing up.",
-  "A tidy record today saves a headache tomorrow.",
-  "Little and often beats all at once.",
-  "Done is better than perfect.",
-  "Every detail you capture now is a favor to future you.",
-  "Keep it simple, keep it moving.",
-  "Small effort, steady result.",
-  "Consistency is quietly powerful.",
-  "One form down is still progress.",
-];
-
 const STORAGE_KEY = "tericvoice:daily-opening";
 
-interface StoredOpeningState {
-  date: string; // YYYY-MM-DD, local
-  usedGeneral: number[]; // GENERAL_QUOTES indexes already spoken today
-}
-
 export interface DailyOpening {
-  quote: string;
+  /** null once today's quote has already been used — callers should
+   * simply omit the quote line entirely in that case, not fall back to
+   * some other quote. */
+  quote: string | null;
   isFirstSessionToday: boolean;
 }
 
@@ -74,42 +60,28 @@ function todayIso(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function readState(): StoredOpeningState | null {
+function getStoredDate(): string | null {
   if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as StoredOpeningState) : null;
-  } catch {
-    return null;
-  }
+  return window.localStorage.getItem(STORAGE_KEY);
 }
 
-function writeState(state: StoredOpeningState): void {
+function setStoredDate(date: string): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  window.localStorage.setItem(STORAGE_KEY, date);
 }
 
 /** Call once per voice session (not per reconnect — see the ref-caching in
- * voice-experience.tsx) to get this session's opening quote. The first
- * call of the calendar day always draws from the motivational pool; every
- * call after that, same day, draws a quote from the general pool that
- * hasn't been used yet today, recycling only once the pool runs dry.
- * Resets itself automatically at midnight since the stored date won't
- * match "today" anymore. */
+ * voice-experience.tsx and ambient-voice-widget.tsx) to find out whether
+ * this session should open with a quote. Only the first call of the
+ * calendar day gets one; every call after that, same day, gets none at
+ * all. Resets itself automatically at midnight since the stored date
+ * won't match "today" anymore. */
 export function getDailyOpeningQuote(): DailyOpening {
   const today = todayIso();
-  const state = readState();
-
-  if (!state || state.date !== today) {
-    writeState({ date: today, usedGeneral: [] });
-    const quote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
-    return { quote, isFirstSessionToday: true };
+  if (getStoredDate() === today) {
+    return { quote: null, isFirstSessionToday: false };
   }
-
-  const available = GENERAL_QUOTES.map((_, i) => i).filter((i) => !state.usedGeneral.includes(i));
-  const pool = available.length > 0 ? available : GENERAL_QUOTES.map((_, i) => i);
-  const idx = pool[Math.floor(Math.random() * pool.length)];
-  const usedGeneral = available.length > 0 ? [...state.usedGeneral, idx] : [idx];
-  writeState({ date: today, usedGeneral });
-  return { quote: GENERAL_QUOTES[idx], isFirstSessionToday: false };
+  setStoredDate(today);
+  const quote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
+  return { quote, isFirstSessionToday: true };
 }

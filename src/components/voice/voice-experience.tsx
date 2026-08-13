@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConversation, ConversationProvider } from "@elevenlabs/react";
 import {
@@ -10,7 +10,6 @@ import {
   Settings2,
   CheckCheck,
   AlertTriangle,
-  Play,
   Save,
 } from "lucide-react";
 import { VoiceOrb, type OrbState } from "@/components/voice/voice-orb";
@@ -41,6 +40,7 @@ import { buildAgentPrompt, buildFirstMessage } from "@/lib/voice-agent-prompt";
 import { getAssistantName, getDailyOpeningQuote } from "@/lib/voice-session-opening";
 import { unlockAudioPlayback } from "@/lib/audio-unlock";
 import { validateAnswer, canSkip } from "@/lib/voice-agent-validate";
+import { markFormSubmitted } from "@/lib/submission-announcement";
 import { useEntriesStore } from "@/lib/entries-store";
 import { currentUser } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
@@ -190,7 +190,6 @@ function VoiceExperienceInner({
     [form, resumeEntry, upsertEntry, router]
   );
 
-  const [started, setStarted] = useState(false);
   const [phase, setPhase] = useState<"conversation" | "review" | "submitting">(
     "conversation"
   );
@@ -233,6 +232,17 @@ function VoiceExperienceInner({
     voiceGenderRef.current = voiceGender;
     setVoiceGender(voiceGender);
   }, [voiceGender]);
+  const languageRef = useRef(language);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+  // The conversation object changes identity on essentially every render
+  // (its own mode/status are part of what triggers those renders), so
+  // clientTools (see below — now memoized for the whole component's
+  // lifetime, needed once this auto-connects instead of waiting for a
+  // click) has to reach it through this instead of closing over
+  // `conversation` directly.
+  const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
   // The day's opening quote is picked once per session (first connect),
   // not re-rolled on a switch_voice reconnect — only the assistant's name
@@ -261,20 +271,17 @@ function VoiceExperienceInner({
     });
   }, []);
 
-  const conversation = useConversation({
-    onMessage: ({ message, role }) => {
-      if (role === "agent") setAssistantText(message);
-    },
-    onError: (message) => {
-      console.error("[voice] agent session error", message);
-      setSessionError(`${message} — you can still fill out the form manually on the right.`);
-    },
-    onDisconnect: (details) => {
-      if (details.reason === "error") {
-        setSessionError(`${details.message} — you can still fill out the form manually on the right.`);
-      }
-    },
-    clientTools: {
+  // Previously an inline object literal recreated fresh on every render —
+  // memoized for the same reason ambient-voice-widget.tsx's clientTools
+  // is: this session now auto-connects on mount instead of waiting for a
+  // click, and an unstable clientTools/config identity is what caused the
+  // ambient widget to tear down and re-establish its connection on
+  // essentially every render (see that file's comment for the full
+  // story). Every handler below reads current data through a ref (or a
+  // stable setState setter) rather than a closed-over value, so "stable
+  // forever" is safe here rather than "frozen with stale data forever".
+  const clientTools = useMemo(
+    () => ({
       announce_question: async (params: { field_name?: string }) => {
         const fieldName = params.field_name;
         if (!fieldName || !findQuestion(form, fieldName)) {
@@ -327,7 +334,7 @@ function VoiceExperienceInner({
         // reconnects — there's no live voice-swap primitive in the SDK, a
         // fresh session with a new overrides.tts.voiceId is the only way.
         window.setTimeout(() => {
-          conversation.endSession();
+          conversationRef.current?.endSession();
           connectSession(gender);
         }, 600);
         return `Switching to a ${gender} voice now.`;
@@ -355,22 +362,46 @@ function VoiceExperienceInner({
           previous: resumeEntry,
         });
         upsertEntry(entry);
+        // The ambient widget mentions this once, on its next connect —
+        // it's a separate agent session that starts fresh once the user
+        // lands back on an authenticated page.
+        markFormSubmitted(form.name);
         router.push(`/entries/${entry.id}`);
         return "Submitted.";
       },
+    }),
+    // Deliberately empty — see the comment above clientTools.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const conversation = useConversation({
+    onMessage: ({ message, role }) => {
+      if (role === "agent") setAssistantText(message);
     },
+    onError: (message) => {
+      console.error("[voice] agent session error", message);
+      setSessionError(`${message} — you can still fill out the form manually on the right.`);
+    },
+    onDisconnect: (details) => {
+      if (details.reason === "error") {
+        setSessionError(`${details.message} — you can still fill out the form manually on the right.`);
+      }
+    },
+    clientTools,
   });
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
 
   const orbState: OrbState =
     phase === "submitting"
       ? "idle"
-      : !started
-        ? "idle"
-        : conversation.status === "connecting"
-          ? "thinking"
-          : conversation.mode === "speaking"
-            ? "speaking"
-            : "listening";
+      : conversation.status === "connecting"
+        ? "thinking"
+        : conversation.mode === "speaking"
+          ? "speaking"
+          : "listening";
 
   // Derived, not effect-driven: once every currently-visible question has
   // been asked about (answered or skipped), the agent is expected to move
@@ -397,18 +428,15 @@ function VoiceExperienceInner({
     }
   }
 
-  useEffect(() => {
-    return () => {
-      conversation.endSession();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // A function declaration (not `const`) so it's hoisted — the switch_voice
   // client tool above references it before this line runs, but by the time
   // that tool actually gets called (a live tool call, long after this
   // render finished), the hoisted declaration is fully defined. Also used
-  // directly by handleStart for the initial connection.
+  // directly by the auto-connect mount effect below. Only ever talks to
+  // the SDK through conversationRef (not the closed-over `conversation`)
+  // for the same reason clientTools is memoized — switch_voice's
+  // reference to this function is itself effectively "frozen" at
+  // first-render, so anything it touches has to be ref-safe too.
   async function connectSession(voiceGenderOverride?: VoiceGender) {
     try {
       const res = await fetch("/api/voice/agent-session");
@@ -421,7 +449,7 @@ function VoiceExperienceInner({
       const voiceId = gender === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
       const assistantName = getAssistantName(gender);
       if (!dailyOpeningRef.current) dailyOpeningRef.current = getDailyOpeningQuote();
-      await conversation.startSession({
+      await conversationRef.current?.startSession({
         signedUrl,
         overrides: {
           agent: {
@@ -430,7 +458,7 @@ function VoiceExperienceInner({
               assistantName,
               quote: dailyOpeningRef.current.quote,
             }),
-            language,
+            language: languageRef.current,
           },
           tts: { voiceId },
         },
@@ -441,11 +469,36 @@ function VoiceExperienceInner({
     }
   }
 
-  async function handleStart() {
+  useEffect(() => {
+    // Auto-connects the moment this screen mounts — no "Start Voice
+    // Entry" click needed. unlockAudioPlayback() is a best-effort call
+    // here (there's no click to attach it to, unlike before): in
+    // practice the ambient widget already proved a real ElevenLabs
+    // session doesn't need the click-gesture unlock plain <audio>
+    // autoplay does, since it's been auto-starting the same way since
+    // login's own click — this just covers the rarer case of landing
+    // here without ever having triggered that.
+    //
+    // Deferred by a tick (and cancellable) for the same reason as the
+    // ambient widget's mount effect: React StrictMode's dev-only
+    // mount→cleanup→mount double-invoke otherwise calls endSession()
+    // while the real connect is still in flight, and the SDK appears to
+    // honor that disconnect the moment the connection actually finishes
+    // a beat later — surfacing as "connects, starts speaking, then
+    // immediately disconnects" on every fresh load.
     unlockAudioPlayback();
-    setStarted(true);
-    await connectSession();
-  }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (!cancelled) connectSession();
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      conversationRef.current?.endSession();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const allQuestions = getAllQuestions(form);
   const visibleCount = allQuestions.filter(
@@ -461,6 +514,14 @@ function VoiceExperienceInner({
 
   function handleSaveDraft() {
     saveDraftAndExit(answers);
+  }
+
+  function handleCancel() {
+    // Deliberately does NOT save anything — same as the discard_entry
+    // voice tool, and for the same reason: avoids leaving behind a pile
+    // of empty/near-empty draft entries from sessions someone just wanted
+    // to back out of.
+    router.push("/entries");
   }
 
   async function handleSubmit() {
@@ -501,72 +562,48 @@ function VoiceExperienceInner({
             }}
           />
 
-          {!started ? (
-            /* Tap-to-begin gate — the click both starts the session and
-               satisfies the browser's autoplay-needs-a-gesture requirement. */
-            <div className="relative flex flex-1 flex-col items-center justify-center gap-6 px-8 text-center">
-              <span className="flex size-16 items-center justify-center rounded-full border border-white/20 bg-white/5">
-                <Mic className="size-7 text-white/70" />
-              </span>
-              <div className="flex flex-col gap-2">
-                <h2 className="text-xl font-semibold">Ready when you are</h2>
-                <p className="max-w-xs text-sm text-white/60">
-                  Tap start, allow microphone access, and answer each question out loud. You
-                  can talk over the assistant any time.
-                </p>
-              </div>
-              <button
-                onClick={handleStart}
-                className="flex items-center gap-2 rounded-full bg-teal px-6 py-3 text-sm font-semibold text-teal-foreground transition-transform active:scale-[0.98]"
-              >
-                <Play className="size-4" />
-                Start Voice Entry
-              </button>
-            </div>
-          ) : (
-            <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-8 py-10">
-              {sessionError ? (
-                <div className="flex max-w-sm flex-col items-center gap-3 text-center">
-                  <span className="flex size-14 items-center justify-center rounded-full bg-warning/20 text-warning">
-                    <AlertTriangle className="size-6" />
-                  </span>
-                  <p className="text-sm text-white/70">{sessionError}</p>
-                </div>
-              ) : (
-                <VoiceOrb state={orbState} size={196} />
-              )}
-
-              <div className="flex max-w-md flex-col items-center gap-3 text-center">
-                {!sessionError && (
-                  <div key={assistantText} className="animate-fade-in-up flex flex-col items-center gap-1.5">
-                    {formatSpokenMessage(assistantText).map((line, i) =>
-                      line.kind === "option" ? (
-                        <span
-                          key={i}
-                          className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/85"
-                        >
-                          {line.text}
-                        </span>
-                      ) : (
-                        <p key={i} className="text-sm leading-snug font-semibold text-white">
-                          {line.text}
-                        </p>
-                      )
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {!sessionError && (
-                <span className="text-xs font-medium uppercase tracking-wide text-white/40">
-                  {conversation.isMuted ? "Muted" : statusLabel}
+          <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-8 py-10">
+            {sessionError ? (
+              <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+                <span className="flex size-14 items-center justify-center rounded-full bg-warning/20 text-warning">
+                  <AlertTriangle className="size-6" />
                 </span>
+                <p className="text-sm text-white/70">{sessionError}</p>
+              </div>
+            ) : (
+              <VoiceOrb state={orbState} size={196} />
+            )}
+
+            <div className="flex max-w-md flex-col items-center gap-3 text-center">
+              {!sessionError && (
+                <div key={assistantText} className="animate-fade-in-up flex flex-col items-center gap-1.5">
+                  {formatSpokenMessage(assistantText).map((line, i) =>
+                    line.kind === "option" ? (
+                      <span
+                        key={i}
+                        className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/85"
+                      >
+                        {line.text}
+                      </span>
+                    ) : (
+                      <p key={i} className="text-sm leading-snug font-semibold text-white">
+                        {line.text}
+                      </p>
+                    )
+                  )}
+                </div>
               )}
             </div>
-          )}
+
+            {!sessionError && (
+              <span className="text-xs font-medium uppercase tracking-wide text-white/40">
+                {conversation.isMuted ? "Muted" : statusLabel}
+              </span>
+            )}
+          </div>
 
           {/* Control bar */}
-          {started && !sessionError && (
+          {!sessionError && (
             <div className="relative flex items-center justify-center gap-3 pb-8">
               <button
                 onClick={() => router.push("/entries")}
@@ -674,6 +711,19 @@ function VoiceExperienceInner({
               You can edit any field manually, or just say &quot;submit&quot; when ready.
             </p>
             <div className="flex items-center gap-2">
+              {/* Same discard behavior as the voice "never mind" path
+                  (discard_entry) — nothing gets saved, so a pile of empty
+                  drafts doesn't build up from sessions someone just
+                  wanted to back out of. */}
+              <Button
+                variant="secondary"
+                disabled={phase === "submitting"}
+                onClick={handleCancel}
+                className="rounded-full"
+                title="Discard this entry without saving"
+              >
+                Cancel
+              </Button>
               {/* Always visible (not just once something's answered) so it's
                   never hard to find — just not usable until there's
                   something worth saving. */}

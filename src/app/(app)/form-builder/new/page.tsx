@@ -363,7 +363,7 @@ function NewFormPageContent() {
        * concern now); a genuinely new form needs an explicit choice since
        * it doesn't have a status yet. */}
       <div className="flex items-center justify-end gap-3 border-t border-border/60 pt-5">
-        <Button variant="ghost" asChild className="rounded-full">
+        <Button variant="secondary" asChild className="rounded-full">
           <Link href="/form-builder">Cancel</Link>
         </Button>
         {isEditing ? (

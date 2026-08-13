@@ -22,6 +22,16 @@ import {
   setIdleTimeoutSeconds,
   type IdleTimeoutSeconds,
 } from "@/lib/use-idle-logout";
+import {
+  LANGUAGE_OPTIONS,
+  getVoiceGender,
+  setVoiceGender,
+  getVoiceLanguage,
+  setVoiceLanguage,
+  announceVoicePreferenceChange,
+  type VoiceGender,
+  type LanguageCode,
+} from "@/lib/voice-client";
 
 const sections = [
   { id: "general", label: "General", icon: Building2 },
@@ -152,6 +162,23 @@ function GeneralSection() {
 }
 
 function VoiceSection() {
+  // Reads straight from localStorage on mount, same convention as
+  // Security's idle-timeout field — this is the one place these are meant
+  // to be changed from now; the ambient widget's own settings popover was
+  // removed in favor of here, and a voice command ("switch to a male
+  // voice") ends up writing the same two keys via the same helpers.
+  const [gender, setGender] = useState<VoiceGender>(() => getVoiceGender());
+  const [language, setLanguageState] = useState<LanguageCode>(() => getVoiceLanguage());
+
+  function handleSave() {
+    setVoiceGender(gender);
+    setVoiceLanguage(language);
+    // Lets the always-on ambient widget reconnect immediately with
+    // whatever's new, rather than only picking it up whenever it next
+    // happens to reconnect for some unrelated reason.
+    announceVoicePreferenceChange();
+  }
+
   return (
     <div>
       <SectionHeader
@@ -160,14 +187,27 @@ function VoiceSection() {
       />
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <Field label="Voice Language">
-          <Select defaultValue="en-GB">
+          <Select value={language} onValueChange={(v) => setLanguageState(v as LanguageCode)}>
             <SelectTrigger className="w-full rounded-xl">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="en-GB">English (UK)</SelectItem>
-              <SelectItem value="en-US">English (US)</SelectItem>
-              <SelectItem value="hi-IN">Hindi</SelectItem>
+              {LANGUAGE_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="Assistant Voice">
+          <Select value={gender} onValueChange={(v) => setGender(v as VoiceGender)}>
+            <SelectTrigger className="w-full rounded-xl">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="male">Male</SelectItem>
+              <SelectItem value="female">Female</SelectItem>
             </SelectContent>
           </Select>
         </Field>
@@ -195,7 +235,11 @@ function VoiceSection() {
         </div>
         <Switch defaultChecked />
       </div>
-      <SaveBar />
+      <div className="mt-8 flex justify-end border-t border-border/60 pt-5">
+        <Button className="rounded-full" onClick={handleSave}>
+          Save Changes
+        </Button>
+      </div>
     </div>
   );
 }

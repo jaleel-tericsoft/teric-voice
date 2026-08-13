@@ -3,23 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useConversation, ConversationProvider } from "@elevenlabs/react";
-import { Mic, MicOff, Settings2 } from "lucide-react";
+import { Mic, MicOff } from "lucide-react";
 import { VoiceOrb, type OrbState } from "@/components/voice/voice-orb";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   getVoiceGender,
   setVoiceGender,
-  LANGUAGE_OPTIONS,
+  getVoiceLanguage,
+  VOICE_PREFERENCE_CHANGED_EVENT,
   type VoiceGender,
-  type LanguageCode,
 } from "@/lib/voice-client";
 import { getAssistantName } from "@/lib/voice-session-opening";
 import {
@@ -39,6 +31,7 @@ import {
   withEmailResent,
 } from "@/lib/entries-store";
 import { performLogout } from "@/lib/logout";
+import { consumePendingSubmissionAnnouncement } from "@/lib/submission-announcement";
 
 const FEMALE_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"; // Rachel
 const MALE_VOICE_ID = "pNInz6obpgDQGcFmaJgB"; // Adam
@@ -51,10 +44,15 @@ const PAGE_ROUTES: Record<string, string> = {
   settings: "/settings",
 };
 
+const SETTINGS_ROUTE = "/settings";
 const FORM_BUILDER_ROUTE = "/form-builder/new";
 
 function asDirection(v: unknown): MoveDirection | null {
   return v === "up" ? "up" : v === "down" ? "down" : null;
+}
+
+function isConfirmed(v: unknown): boolean {
+  return v === "true" || v === true;
 }
 
 /** Always-on ambient assistant, present on every authenticated page (see
@@ -67,7 +65,11 @@ function asDirection(v: unknown): MoveDirection | null {
  * request, and logout. While on /form-builder/new specifically, it
  * reconnects to a *third* agent (?agent=form-builder) scoped to
  * voice-driven form building, then reconnects back the moment the user
- * navigates away. */
+ * navigates away.
+ *
+ * Voice/language themselves aren't configurable from here anymore — that
+ * now lives solely in Settings (Voice & AI). This widget just listens for
+ * VOICE_PREFERENCE_CHANGED_EVENT and reconnects with whatever's current. */
 export function AmbientVoiceWidget() {
   return (
     <ConversationProvider>
@@ -83,8 +85,6 @@ function AmbientVoiceWidgetInner() {
   const { entries, upsertEntry } = useEntriesStore();
   const draftStore = useFormBuilderDraft();
   const [connectError, setConnectError] = useState<string | null>(null);
-  const [language, setLanguageState] = useState<LanguageCode>("en");
-  const [voiceGender, setVoiceGenderState] = useState<VoiceGender>(() => getVoiceGender());
   // Set by the voice-triggered go_silent/resume_speaking tools — distinct
   // from the manual mute button below (which cuts the mic entirely, so it
   // could never hear "unmute"). This instead silences the assistant's own
@@ -119,10 +119,6 @@ function AmbientVoiceWidgetInner() {
   useEffect(() => {
     isFormBuilderNewRef.current = isFormBuilderNew;
   }, [isFormBuilderNew]);
-  const languageRef = useRef(language);
-  useEffect(() => {
-    languageRef.current = language;
-  }, [language]);
   // The conversation object itself changes identity on essentially every
   // render (its own mode/status are part of what triggers those renders),
   // so anything that needs to call its methods from a handler that isn't
@@ -149,18 +145,40 @@ function AmbientVoiceWidgetInner() {
   const clientTools = useMemo(
     () => ({
       // --- Ambient-mode tools (agent=ambient) ---
-      navigate_to: async (params: { page?: string }) => {
+      navigate_to: async (params: { page?: string; form_name?: string }) => {
         const key = (params.page ?? "").trim().toLowerCase().replace(/\s+/g, "-");
         const target = PAGE_ROUTES[key];
         if (!target) {
           return 'Unknown page — must be one of: dashboard, entries, form-builder, settings.';
         }
+
+        let destination = target;
+        let matchedFormName: string | null = null;
+        if (key === "entries" && params.form_name?.trim()) {
+          const needle = params.form_name.trim().toLowerCase();
+          const match =
+            formsRef.current.find((f) => f.name.toLowerCase() === needle) ??
+            formsRef.current.find((f) => f.name.toLowerCase().includes(needle));
+          if (match) {
+            destination = `/entries?form=${match.formId}`;
+            matchedFormName = match.name;
+          }
+        }
+
+        // Only short-circuits on "already here" for a plain page nav —
+        // once a form filter is involved the current pathname alone
+        // (usePathname() excludes the query string) can't tell us
+        // whether the *same* filter is already active, so it's safer to
+        // just navigate again than risk a false "we're already here".
         const current = pathnameRef.current ?? "";
-        if (current === target || current.startsWith(`${target}/`)) {
+        if (!matchedFormName && (current === target || current.startsWith(`${target}/`))) {
           return "We're already here.";
         }
-        router.push(target);
-        return `Navigating to ${params.page}.`;
+
+        router.push(destination);
+        return matchedFormName
+          ? `Navigating to ${matchedFormName}'s entries.`
+          : `Navigating to ${params.page}.`;
       },
       start_form_filling: async (params: { form_name?: string }) => {
         const active = formsRef.current.filter((f) => f.status === "active");
@@ -231,20 +249,30 @@ function AmbientVoiceWidgetInner() {
         upsertEntry(withEmailResent(withCustomerEmail(entry, email), email));
         return `Got it — sent the PDF to ${email}.`;
       },
-      switch_voice: async (params: { gender?: string }) => {
+      // Voice/language now live only in Settings — this still works from
+      // anywhere, but confirms first unless already on the Settings page,
+      // since it's changing something the user isn't looking at.
+      switch_voice: async (params: { gender?: string; confirmed?: string }) => {
         const gender: VoiceGender | null =
           params.gender === "male" ? "male" : params.gender === "female" ? "female" : null;
         if (!gender) return 'Unknown gender — must be "male" or "female".';
-        setVoiceGenderState(gender);
+
+        const onSettingsPage = pathnameRef.current === SETTINGS_ROUTE;
+        if (!onSettingsPage && !isConfirmed(params.confirmed)) {
+          return `Ask the user to confirm first, since they're not on the Settings page right now — say something like "I'll switch to a ${gender} voice and update this in Settings too — is that okay?" Only call switch_voice again with confirmed set to "true" once they clearly agree.`;
+        }
+
         setVoiceGender(gender);
         // Same brief delay as voice-experience.tsx's own switch_voice —
         // gives this tool's spoken return value a moment to actually play
         // before endSession/startSession tears the session down.
         window.setTimeout(() => {
           conversationRef.current?.endSession();
-          connectAmbientSession(isFormBuilderNewRef.current, true, undefined, gender);
+          connectAmbientSession(isFormBuilderNewRef.current, true, gender);
         }, 600);
-        return `Switching to a ${gender} voice now.`;
+        return onSettingsPage
+          ? `Switching to a ${gender} voice now.`
+          : `Switching to a ${gender} voice now — updated in Settings too.`;
       },
       // Prompt requires a spoken confirmation before this ever gets
       // called (see ambient-agent-prompt.ts) — by the time it's called,
@@ -355,6 +383,16 @@ function AmbientVoiceWidgetInner() {
         if (!direction) return 'Direction must be "up" or "down".';
         return draftStoreRef.current.moveSectionByVoice(params.section, direction).message;
       },
+      // Destructive (removes every question in the section too), so this
+      // always requires confirmation first — the prompt is told to ask,
+      // then call again with confirmed set to "true".
+      remove_section: async (params: { section?: string; confirmed?: string }) => {
+        if (!params.section?.trim()) return "Which section should I remove?";
+        if (!isConfirmed(params.confirmed)) {
+          return `Ask the user to confirm before deleting — say something like "Just to confirm, delete the ${params.section} section and all its questions?" Only call remove_section again with confirmed set to "true" once they say yes.`;
+        }
+        return draftStoreRef.current.removeSectionByVoice(params.section).message;
+      },
       toggle_entry_column: async (params: { field?: string }) => {
         if (!params.field?.trim()) return "Which field?";
         return draftStoreRef.current.toggleEntryColumnByVoice(params.field).message;
@@ -407,25 +445,25 @@ function AmbientVoiceWidgetInner() {
 
   // A function declaration (not `const`), same reasoning as
   // voice-experience.tsx's connectSession: it's invoked from the
-  // auto-connect effect, the mode-change effect, the settings popover,
-  // switch_voice above, and the orb's click handler (the manual-retry
-  // path), so it can't live inside just one of them. It only ever talks
-  // to the SDK through conversationRef, same reasoning as clientTools —
-  // switch_voice's reference to this function is itself effectively
-  // "frozen" at first-render (captured once, inside the memoized
-  // clientTools), so anything it touches has to be ref-safe too, not just
-  // its own direct SDK calls. `builderMode` picks which of the two agents
-  // to connect to; `isReconnect` (a same-conversation continuation, not
-  // the very first connect of the session) picks a short transition line
-  // instead of the full name+quote self-introduction. The two overrides
-  // exist because a settings change needs its new value applied
-  // immediately, and reading the just-set React state back in the same
-  // tick isn't reliable (setState is async) — so the settings handlers
-  // pass the new value straight through instead.
+  // auto-connect effect, the mode-change effect, the preference-change
+  // listener, switch_voice above, and the orb's click handler (the
+  // manual-retry path), so it can't live inside just one of them. It only
+  // ever talks to the SDK through conversationRef, same reasoning as
+  // clientTools — switch_voice's reference to this function is itself
+  // effectively "frozen" at first-render (captured once, inside the
+  // memoized clientTools), so anything it touches has to be ref-safe too,
+  // not just its own direct SDK calls. `builderMode` picks which of the
+  // two agents to connect to; `isReconnect` (a same-conversation
+  // continuation, not the very first connect of the session) picks a
+  // short transition line instead of the full name+quote
+  // self-introduction. `genderOverride` exists because a just-confirmed
+  // voice switch needs its new value applied immediately, and there's no
+  // React state here to read back on the next render anymore (gender
+  // lives in localStorage only) — getVoiceGender() would just return the
+  // same value being set in this exact call otherwise.
   async function connectAmbientSession(
     builderMode: boolean,
     isReconnect: boolean,
-    languageOverride?: LanguageCode,
     genderOverride?: VoiceGender
   ) {
     setConnectError(null);
@@ -438,7 +476,7 @@ function AmbientVoiceWidgetInner() {
       }
       const { signedUrl } = await res.json();
       const gender = genderOverride ?? getVoiceGender();
-      const lang = languageOverride ?? languageRef.current;
+      const lang = getVoiceLanguage();
       const assistantName = getAssistantName(gender);
       const voiceId = gender === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
       const prompt = builderMode
@@ -448,7 +486,7 @@ function AmbientVoiceWidgetInner() {
         ? buildFormBuilderFirstMessage()
         : isReconnect
           ? buildAmbientResumeMessage()
-          : buildAmbientFirstMessage(assistantName);
+          : buildAmbientFirstMessage(assistantName, consumePendingSubmissionAnnouncement());
       // Marks that the next time conversation.status actually reports
       // "connected" (observed reactively, below), this session still
       // needs its post-connect setup done. Deliberately NOT done right
@@ -521,6 +559,20 @@ function AmbientVoiceWidgetInner() {
     connectAmbientSession(isFormBuilderNew, true);
   }, [isFormBuilderNew]);
 
+  // Voice/language changed from Settings — reconnect live with whatever's
+  // now current, rather than only picking it up whenever this widget next
+  // happens to reconnect for some unrelated reason. A same-tab
+  // localStorage write doesn't fire the native `storage` event (that only
+  // reaches *other* tabs), hence the custom event.
+  useEffect(() => {
+    function handlePreferenceChange() {
+      conversationRef.current?.endSession();
+      connectAmbientSession(isFormBuilderNewRef.current, true);
+    }
+    window.addEventListener(VOICE_PREFERENCE_CHANGED_EVENT, handlePreferenceChange);
+    return () => window.removeEventListener(VOICE_PREFERENCE_CHANGED_EVENT, handlePreferenceChange);
+  }, []);
+
   // Keeps the mic muted for as long as the assistant is the one talking,
   // unmuting again the instant it's done — this is what stops the widget
   // from hearing (and sometimes acting on) its own TTS bleeding back into
@@ -539,24 +591,11 @@ function AmbientVoiceWidgetInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.mode, conversation.status]);
 
-  function changeLanguage(next: LanguageCode) {
-    setLanguageState(next);
-    conversation.endSession();
-    connectAmbientSession(isFormBuilderNew, true, next);
-  }
-
-  function changeVoiceGender(next: VoiceGender) {
-    setVoiceGenderState(next);
-    setVoiceGender(next);
-    conversation.endSession();
-    connectAmbientSession(isFormBuilderNew, true, undefined, next);
-  }
-
   // onError can fire with a transient, non-fatal warning even on a
   // connection that's otherwise fine (conversation.status genuinely says
   // "connected") — only treat it as a real, user-facing error state when
   // the session isn't actually connected, so a stale message can't hide
-  // the status label or the mic/settings controls on a healthy session.
+  // the status label or the mic controls on a healthy session.
   const hasBlockingError = Boolean(connectError) && conversation.status !== "connected";
 
   const orbState: OrbState =
@@ -614,74 +653,23 @@ function AmbientVoiceWidgetInner() {
         </span>
 
         {conversation.status === "connected" && (
-          <div className="flex items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !conversation.isMuted;
-                    userMutedRef.current = next;
-                    conversation.setMuted(next);
-                  }}
-                  aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
-                  className={muteButtonClass(conversation.isMuted)}
-                >
-                  {conversation.isMuted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left">{conversation.isMuted ? "Unmute" : "Mute"}</TooltipContent>
-            </Tooltip>
-
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="Voice settings"
-                  className="flex size-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
-                >
-                  <Settings2 className="size-4" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="end" side="left" className="w-64 border-none bg-background">
-                <div className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Spoken language</span>
-                    <Select value={language} onValueChange={(v) => changeLanguage(v as LanguageCode)}>
-                      <SelectTrigger className="h-9 w-full rounded-lg">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {LANGUAGE_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-[11px] text-muted-foreground">
-                      Reconnects the assistant right away.
-                    </p>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Assistant voice</span>
-                    <Select value={voiceGender} onValueChange={(v) => changeVoiceGender(v as VoiceGender)}>
-                      <SelectTrigger className="h-9 w-full rounded-lg">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="female">Female</SelectItem>
-                        <SelectItem value="male">Male</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-[11px] text-muted-foreground">
-                      Reconnects the assistant right away, and is remembered on this device.
-                    </p>
-                  </div>
-                </div>
-              </PopoverContent>
-            </Popover>
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !conversation.isMuted;
+                  userMutedRef.current = next;
+                  conversation.setMuted(next);
+                }}
+                aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
+                className={muteButtonClass(conversation.isMuted)}
+              >
+                {conversation.isMuted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">{conversation.isMuted ? "Unmute" : "Mute"}</TooltipContent>
+          </Tooltip>
         )}
       </div>
     </div>

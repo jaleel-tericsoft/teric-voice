@@ -116,9 +116,30 @@ export function validateAnswer(q: FormQuestion, rawValue: string): ValidationRes
       return { ok: true, value: String(Math.round(num)) };
     }
 
+    case "phone": {
+      // UK mobile format: 11 digits starting "07" (e.g. 07700 900123),
+      // or the +44 equivalent — strips everything but digits and a
+      // leading "+" first, so spaced-out/punctuated numbers the model
+      // already cleaned up still validate correctly either way.
+      const digitsOnly = trimmed.replace(/[^\d+]/g, "");
+      const ukMobileRe = /^(?:\+44|0)7\d{9}$/;
+      if (!ukMobileRe.test(digitsOnly)) {
+        return {
+          ok: false,
+          reason:
+            "That doesn't look like a valid UK mobile number — it needs to be exactly 11 digits starting with 07 (e.g. 07700 900123), or the +44 equivalent. Read back what you heard, explain it doesn't look right, and ask the user to repeat or correct it.",
+        };
+      }
+      // Normalized to the standard local 07xxx format regardless of
+      // which form (with/without +44, with/without spaces) came in, so
+      // every recorded number reads the same way in Entries/PDFs.
+      const normalized = digitsOnly.startsWith("+44") ? `0${digitsOnly.slice(3)}` : digitsOnly;
+      return { ok: true, value: normalized };
+    }
+
     default:
-      // short_text / long_text / phone / email — no special validation,
-      // matches the old behavior (these were never Zod-refined either).
+      // short_text / long_text / email — no special validation, matches
+      // the old behavior (these were never Zod-refined either).
       return { ok: true, value: trimmed };
   }
 }

@@ -13,7 +13,7 @@ import {
   VOICE_PREFERENCE_CHANGED_EVENT,
   type VoiceGender,
 } from "@/lib/voice-client";
-import { getAssistantName } from "@/lib/voice-session-opening";
+import { getAssistantName, buildVoiceSwitchedMessage } from "@/lib/voice-session-opening";
 import {
   buildAmbientAgentPrompt,
   buildAmbientFirstMessage,
@@ -22,6 +22,7 @@ import {
 import { buildFormBuilderAgentPrompt, buildFormBuilderFirstMessage } from "@/lib/form-builder-agent-prompt";
 import { normalizeFieldType, FIELD_TYPE_HINT } from "@/lib/voice-form-builder-validate";
 import { useFormBuilderDraft, needsOptions, type MoveDirection } from "@/lib/form-builder-draft-store";
+import { useEntriesFilterStore } from "@/lib/entries-filter-store";
 import { useFormsStore } from "@/lib/forms-store";
 import {
   useEntriesStore,
@@ -85,6 +86,7 @@ function AmbientVoiceWidgetInner() {
   const { forms, setFormStatus } = useFormsStore();
   const { entries, upsertEntry } = useEntriesStore();
   const draftStore = useFormBuilderDraft();
+  const entriesFilterStore = useEntriesFilterStore();
   const [connectError, setConnectError] = useState<string | null>(null);
   // Set by the voice-triggered go_silent/resume_speaking tools — distinct
   // from the manual mute button below (which cuts the mic entirely, so it
@@ -112,6 +114,10 @@ function AmbientVoiceWidgetInner() {
   useEffect(() => {
     draftStoreRef.current = draftStore;
   }, [draftStore]);
+  const entriesFilterStoreRef = useRef(entriesFilterStore);
+  useEffect(() => {
+    entriesFilterStoreRef.current = entriesFilterStore;
+  }, [entriesFilterStore]);
   const pathnameRef = useRef(pathname);
   useEffect(() => {
     pathnameRef.current = pathname;
@@ -180,6 +186,13 @@ function AmbientVoiceWidgetInner() {
         return matchedFormName
           ? `Navigating to ${matchedFormName}'s entries.`
           : `Navigating to ${params.page}.`;
+      },
+      filter_entries: async (params: { field?: string; value?: string }) => {
+        if (!params.value?.trim()) return "What value should that filter match? Ask the user to clarify.";
+        return entriesFilterStoreRef.current.filterByVoice(params.field ?? "", params.value).message;
+      },
+      reset_entries_filters: async () => {
+        return entriesFilterStoreRef.current.resetFilters().message;
       },
       start_form_filling: async (params: { form_name?: string }) => {
         const active = formsRef.current.filter((f) => f.status === "active");
@@ -269,7 +282,7 @@ function AmbientVoiceWidgetInner() {
         // before endSession/startSession tears the session down.
         window.setTimeout(() => {
           conversationRef.current?.endSession();
-          connectAmbientSession(isFormBuilderNewRef.current, true, gender);
+          connectAmbientSession(isFormBuilderNewRef.current, "voice-switched", gender);
         }, 600);
         return onSettingsPage
           ? `Switching to a ${gender} voice now.`
@@ -454,17 +467,21 @@ function AmbientVoiceWidgetInner() {
   // effectively "frozen" at first-render (captured once, inside the
   // memoized clientTools), so anything it touches has to be ref-safe too,
   // not just its own direct SDK calls. `builderMode` picks which of the
-  // two agents to connect to; `isReconnect` (a same-conversation
-  // continuation, not the very first connect of the session) picks a
-  // short transition line instead of the full name+quote
-  // self-introduction. `genderOverride` exists because a just-confirmed
-  // voice switch needs its new value applied immediately, and there's no
-  // React state here to read back on the next render anymore (gender
-  // lives in localStorage only) — getVoiceGender() would just return the
-  // same value being set in this exact call otherwise.
+  // two agents to connect to; `reconnectReason` (omitted entirely on the
+  // very first connect of the session) picks which opening line applies:
+  // "voice-switched" gets a full name+greeting reintroduction (the voice
+  // actually changed, so it should sound like it), "mode-return" gets a
+  // short transition line (just crossing between the ambient and
+  // form-builder agents, same voice throughout), and omitted gets the
+  // full first-ever-login opening (name, daily quote if still owed,
+  // submission/instructions extras). `genderOverride` exists because a
+  // just-confirmed voice switch needs its new value applied immediately,
+  // and there's no React state here to read back on the next render
+  // anymore (gender lives in localStorage only) — getVoiceGender() would
+  // just return the same value being set in this exact call otherwise.
   async function connectAmbientSession(
     builderMode: boolean,
-    isReconnect: boolean,
+    reconnectReason?: "voice-switched" | "mode-return",
     genderOverride?: VoiceGender
   ) {
     setConnectError(null);
@@ -483,15 +500,18 @@ function AmbientVoiceWidgetInner() {
       const prompt = builderMode
         ? buildFormBuilderAgentPrompt(assistantName)
         : buildAmbientAgentPrompt(assistantName, formsRef.current);
-      const firstMessage = builderMode
-        ? buildFormBuilderFirstMessage()
-        : isReconnect
-          ? buildAmbientResumeMessage()
-          : buildAmbientFirstMessage(
-              assistantName,
-              consumePendingSubmissionAnnouncement(),
-              consumePendingInstructionsOffer()
-            );
+      const firstMessage =
+        reconnectReason === "voice-switched"
+          ? buildVoiceSwitchedMessage(assistantName)
+          : builderMode
+            ? buildFormBuilderFirstMessage()
+            : reconnectReason === "mode-return"
+              ? buildAmbientResumeMessage()
+              : buildAmbientFirstMessage(
+                  assistantName,
+                  consumePendingSubmissionAnnouncement(),
+                  consumePendingInstructionsOffer()
+                );
       // Marks that the next time conversation.status actually reports
       // "connected" (observed reactively, below), this session still
       // needs its post-connect setup done. Deliberately NOT done right
@@ -539,7 +559,7 @@ function AmbientVoiceWidgetInner() {
     // that never started, instead of one that's mid-handshake.
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      if (!cancelled) connectAmbientSession(isFormBuilderNew, false);
+      if (!cancelled) connectAmbientSession(isFormBuilderNew);
     }, 0);
 
     return () => {
@@ -561,18 +581,20 @@ function AmbientVoiceWidgetInner() {
     if (prevIsFormBuilderRef.current === isFormBuilderNew) return;
     prevIsFormBuilderRef.current = isFormBuilderNew;
     conversationRef.current?.endSession();
-    connectAmbientSession(isFormBuilderNew, true);
+    connectAmbientSession(isFormBuilderNew, "mode-return");
   }, [isFormBuilderNew]);
 
   // Voice/language changed from Settings — reconnect live with whatever's
   // now current, rather than only picking it up whenever this widget next
   // happens to reconnect for some unrelated reason. A same-tab
   // localStorage write doesn't fire the native `storage` event (that only
-  // reaches *other* tabs), hence the custom event.
+  // reaches *other* tabs), hence the custom event. Treated the same as an
+  // in-conversation switch_voice — a fresh name+greeting reintroduction,
+  // since either a voice or a language change came from here.
   useEffect(() => {
     function handlePreferenceChange() {
       conversationRef.current?.endSession();
-      connectAmbientSession(isFormBuilderNewRef.current, true);
+      connectAmbientSession(isFormBuilderNewRef.current, "voice-switched");
     }
     window.addEventListener(VOICE_PREFERENCE_CHANGED_EVENT, handlePreferenceChange);
     return () => window.removeEventListener(VOICE_PREFERENCE_CHANGED_EVENT, handlePreferenceChange);
@@ -633,7 +655,7 @@ function AmbientVoiceWidgetInner() {
     // gets a manual way back in — clicking just re-runs the same connect
     // logic for whichever mode applies right now.
     if (conversation.status === "connected") return;
-    connectAmbientSession(isFormBuilderNew, false);
+    connectAmbientSession(isFormBuilderNew);
   }
 
   return (

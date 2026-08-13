@@ -33,6 +33,11 @@ import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Entry, FormDefinition } from "@/types";
 import { Inbox, Mic, Eye, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, ListFilter } from "lucide-react";
+import {
+  useEntriesFilterStore,
+  STATUS_FILTER_OPTIONS,
+  EMAIL_FILTER_OPTIONS,
+} from "@/lib/entries-filter-store";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 
@@ -55,19 +60,6 @@ const CELL_PAD = "px-4 py-3";
 type SortDir = "asc" | "desc";
 type SortState = { key: string; dir: SortDir } | null;
 type FilterOption = { label: string; value: string };
-type FilterState = Record<string, Set<string>>;
-
-const STATUS_FILTER_OPTIONS: FilterOption[] = [
-  { label: "In Progress", value: "in_progress" },
-  { label: "Completed", value: "completed" },
-];
-
-const EMAIL_FILTER_OPTIONS: FilterOption[] = [
-  { label: "Sent", value: "sent" },
-  { label: "Pending", value: "pending" },
-  { label: "Failed", value: "failed" },
-  { label: "Not sent", value: "not_sent" },
-];
 
 /** Ant Design–style stacked-caret sort indicator: the caret pointing in
  * the active direction lights up, the other stays dim. */
@@ -244,7 +236,11 @@ export function EntriesTable({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [sort, setSort] = useState<SortState>(null);
-  const [filters, setFilters] = useState<FilterState>({});
+  // Filters live in a shared store, not local state — the ambient
+  // widget's voice tools (filter_entries/reset_entries_filters) need to
+  // drive the exact same Set this table renders from, not a copy that
+  // could drift out of sync. See entries-filter-store.tsx.
+  const { filters, setFilters } = useEntriesFilterStore();
 
   function toggleSort(key: string) {
     setSort((prev) => {

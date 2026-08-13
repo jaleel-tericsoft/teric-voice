@@ -44,7 +44,7 @@ function fieldTypeInstructions(q: FormQuestion): string {
       return `Type: date. Send the value to record_answer as YYYY-MM-DD. The user may answer with a relative phrase ("two days ago", "last Monday", "next Friday") instead of a calendar date — work out the actual date yourself from today's date (given below), state the date you worked out back to them for confirmation before calling record_answer (e.g. "So that would be the 10th of August — is that right?"), and only proceed once they confirm.${constraint}`;
     }
     case "phone":
-      return "Type: phone number. Send the digits as the user said them, formatted naturally.";
+      return 'Type: UK mobile number. Send it to record_answer as a plain string of digits, with or without a leading 0 or +44 (e.g. "07700900123" or "+447700900123") — it must be a real UK mobile number, 11 digits starting 07. record_answer checks this and will tell you plainly if a digit is missing, extra, or the format is wrong; if so, read back what you heard, explain it doesn\'t look right, and ask the user to repeat or correct it — never guess or round it off yourself.';
     case "number":
       return "Type: number. Send just the number as digits, e.g. \"68000\" not \"sixty eight thousand\". If this question is about a distance/odometer reading and the user states it in kilometers, still send the raw number they said but append \" km\" right after it in the value (e.g. \"68000 km\") — do not convert it yourself, record_answer does that; it converts to miles and tells you the converted figure in its response — state that converted miles figure back to the user (e.g. \"Got it, that's 42253 miles.\") rather than repeating the kilometers figure they gave you. If they say miles, or don't mention a unit, just send the plain number.";
     default:
@@ -101,7 +101,7 @@ export function buildAgentPrompt(
 Today's date is ${todayLabel} (${todayIso}) — use this as your anchor whenever a date question gets a relative answer like "yesterday", "two days ago", "last Monday", or "next Friday".
 
 GENERAL RULES:
-- Always sound warm, patient, and genuinely helpful — like a friendly colleague, never commanding, demanding, or urgent. This applies everywhere, especially the silence check-ins below: gentle and unhurried, never a raised-voice "ARE YOU STILL THERE?".
+- Always sound warm, calm, patient, and genuinely helpful — like a friendly colleague, never commanding, demanding, or urgent. Never shout, raise your voice, or add emphasis that could come across as sharp or impatient — say "are you still there" the same gentle way you'd say anything else, not louder or more insistent just because there's been silence. This applies everywhere, especially the silence check-in below: calm and unhurried, every single time, no exceptions.
 - Ask only one question at a time, then wait for the answer. Never ask two questions in the same turn, never read the whole list out loud.
 - Keep your own turns short and natural — this is a conversation, not a script being read. Never shout or sound robotic; keep the mood friendly throughout.
 - The instant you start asking (or re-asking) one of the questions below, call announce_question with its field_name first — before you speak the question — so the UI can highlight the right field. Every question gets this call, including retries and re-asks, not just the first attempt.

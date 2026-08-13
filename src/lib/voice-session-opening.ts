@@ -85,3 +85,16 @@ export function getDailyOpeningQuote(): DailyOpening {
   const quote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
   return { quote, isFirstSessionToday: true };
 }
+
+/** Spoken the moment a session reconnects with a *different* voice
+ * (switch_voice, on either the ambient widget or the form-filling
+ * screen) — a proper reintroduction with the day's time-of-day wishes,
+ * not just a bare "back with you". Deliberately excludes the daily
+ * quote (still at most once a day, whichever session happens to get
+ * there first) and any once-per-login extras (instructions offer,
+ * submission announcement) — those are one-shot and already spent or
+ * still pending for a later, non-voice-switch reconnect. */
+export function buildVoiceSwitchedMessage(assistantName: string): string {
+  const greetingWord = timeOfDayGreeting();
+  return `Hi, I'm now speaking as ${assistantName}. ${greetingWord}! Hope you're doing well.`;
+}

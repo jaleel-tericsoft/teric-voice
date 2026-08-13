@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Plus } from "lucide-react";
@@ -11,6 +11,7 @@ import { useFormsStore } from "@/lib/forms-store";
 import { useEntriesStore } from "@/lib/entries-store";
 import { getEntryTableColumns } from "@/lib/form-utils";
 import { useColumnVisibility } from "@/lib/use-column-visibility";
+import { useEntriesFilterStore } from "@/lib/entries-filter-store";
 import { cn } from "@/lib/utils";
 
 export default function EntriesPage() {
@@ -34,6 +35,24 @@ function EntriesPageContent() {
     `teric-entries-columns:${activeForm.id}`,
     columns.map((c) => c.key)
   );
+
+  // Registers which form's table is actually on screen (so the ambient
+  // widget's filterByVoice can resolve against its real columns/options),
+  // and resets any active filters back to default the moment the user
+  // switches form tabs or leaves this page entirely — a filter that made
+  // sense for one form's questions won't necessarily mean anything for
+  // another's, and a stale filter silently hiding rows on the next visit
+  // would be a nasty surprise.
+  const { registerActiveForm, resetFilters } = useEntriesFilterStore();
+  useEffect(() => {
+    registerActiveForm(activeForm);
+    resetFilters();
+    return () => {
+      registerActiveForm(null);
+      resetFilters();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeForm.id]);
 
   return (
     <div className="flex flex-col gap-5 pt-6">
@@ -96,7 +115,11 @@ function EntriesPageContent() {
         })}
       </div>
 
-      <EntriesTable form={activeForm} entries={entries} columnVisibility={visible} />
+      {/* key forces a fresh table per form — sort/page are still local
+       * state inside EntriesTable, and a stale sort key or page number
+       * from the previous form's table wouldn't necessarily mean
+       * anything for this one. */}
+      <EntriesTable key={activeForm.id} form={activeForm} entries={entries} columnVisibility={visible} />
     </div>
   );
 }

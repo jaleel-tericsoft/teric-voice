@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getAllQuestions, findQuestion } from "@/lib/form-utils";
+import { getAllQuestions, getSections, findQuestion, findSectionByVoice } from "@/lib/form-utils";
 import {
   getVoiceGender,
   setVoiceGender,
@@ -200,6 +200,12 @@ function VoiceExperienceInner({
   // Briefly flashes a field in the form preview when an answer/correction
   // lands on it — takes priority over activeField while it's showing.
   const [highlightField, setHighlightField] = useState<string | null>(null);
+  // Set by the voice-triggered go_silent/resume_speaking tools — distinct
+  // from the manual mute button below (which cuts the mic entirely, so it
+  // could never hear "unmute"). This instead silences the assistant's own
+  // output (conversation.setVolume) while leaving the mic live, so it can
+  // still hear the word to resume. Same pattern as ambient-voice-widget.tsx.
+  const [silenced, setSilenced] = useState(false);
   const [answers, setAnswers] = useState<AnswerMap>(() => {
     if (!resumeEntry) return {};
     const map: AnswerMap = {};
@@ -290,6 +296,27 @@ function VoiceExperienceInner({
         setActiveField(fieldName);
         return "ok";
       },
+      go_to_section: async (params: { section?: string }) => {
+        if (!params.section?.trim()) return "Which section would you like to jump to?";
+        const section = findSectionByVoice(form, params.section);
+        if (!section) {
+          const names = getSections(form)
+            .map((s) => s.title)
+            .join(", ");
+          return `I couldn't find a section called "${params.section}". The sections are: ${names}.`;
+        }
+        const nextQuestion = section.questions.find((q) => {
+          const value = answersRef.current[q.fieldName];
+          return value === undefined || value === "";
+        });
+        if (!nextQuestion) {
+          return `Everything in the ${section.title} section is already filled in — want to move on, or change something there?`;
+        }
+        // Already does what announce_question would do for this question —
+        // no need for the agent to call that separately right after this.
+        setActiveField(nextQuestion.fieldName);
+        return `Switched to the ${section.title} section. Ask: "${nextQuestion.questionText}"`;
+      },
       record_answer: async (params: { field_name?: string; value?: string }) => {
         const fieldName = params.field_name;
         const q = fieldName ? findQuestion(form, fieldName) : undefined;
@@ -338,6 +365,16 @@ function VoiceExperienceInner({
           connectSession(gender);
         }, 600);
         return `Switching to a ${gender} voice now.`;
+      },
+      go_silent: async () => {
+        setSilenced(true);
+        conversationRef.current?.setVolume({ volume: 0 });
+        return "ok";
+      },
+      resume_speaking: async () => {
+        setSilenced(false);
+        conversationRef.current?.setVolume({ volume: 1 });
+        return "I'm back.";
       },
       save_draft_and_exit: async () => {
         saveDraftAndExit(answersRef.current);
@@ -544,9 +581,11 @@ function VoiceExperienceInner({
       ? "Ready for review"
       : conversation.status === "connecting"
         ? "Connecting…"
-        : conversation.mode === "speaking"
-          ? "Speaking…"
-          : "Listening…";
+        : silenced
+          ? 'Silenced — say "unmute"'
+          : conversation.mode === "speaking"
+            ? "Speaking…"
+            : "Listening…";
 
   return (
     <div className="flex h-dvh w-full flex-col gap-3 bg-canvas p-3">

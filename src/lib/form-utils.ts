@@ -1,4 +1,4 @@
-import type { Entry, EntryAnswer, FormDefinition, FormQuestion } from "@/types";
+import type { Entry, EntryAnswer, FormDefinition, FormQuestion, FormSection } from "@/types";
 
 export function getCurrentVersion(form: FormDefinition) {
   return (
@@ -7,9 +7,12 @@ export function getCurrentVersion(form: FormDefinition) {
   );
 }
 
+export function getSections(form: FormDefinition): FormSection[] {
+  return getCurrentVersion(form).sections;
+}
+
 export function getAllQuestions(form: FormDefinition): FormQuestion[] {
-  const version = getCurrentVersion(form);
-  return version.sections.flatMap((s) => s.questions);
+  return getSections(form).flatMap((s) => s.questions);
 }
 
 export function findQuestion(
@@ -17,6 +20,44 @@ export function findQuestion(
   fieldName: string
 ): FormQuestion | undefined {
   return getAllQuestions(form).find((q) => q.fieldName === fieldName);
+}
+
+/** Resolves a spoken section reference — an ordinal ("the second
+ * section", "section 3"), "last", or a fragment of its current title
+ * ("the vehicle details section") — to a section. Same matching
+ * convention as findSectionIndex in form-builder-draft-store.tsx (kept
+ * as a separate copy since that one works on DraftSection, this one on
+ * the read-only, already-published FormSection). Returns undefined if
+ * nothing matches. Used by the form-filling agent's go_to_section tool. */
+export function findSectionByVoice(
+  form: FormDefinition,
+  identifier: string
+): FormSection | undefined {
+  const sections = getSections(form);
+  const needle = identifier.trim().toLowerCase();
+  if (!needle) return undefined;
+
+  if (/\blast\b/.test(needle)) return sections[sections.length - 1];
+
+  const numMatch = needle.match(/\d+/);
+  if (numMatch) {
+    const n = parseInt(numMatch[0], 10);
+    if (n >= 1 && n <= sections.length) return sections[n - 1];
+  }
+
+  const ordinals: Record<string, number> = {
+    first: 1,
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+  };
+  for (const [word, n] of Object.entries(ordinals)) {
+    if (needle.includes(word) && n <= sections.length) return sections[n - 1];
+  }
+
+  return sections.find((s) => s.title.toLowerCase().includes(needle));
 }
 
 /** Short, title-cased label derived from a fieldName — used for compact contexts like table headers. */

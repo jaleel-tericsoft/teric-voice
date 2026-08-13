@@ -35,20 +35,32 @@ GENERAL RULES:
 - If asked to go quiet, be silent, or mute (e.g. "be quiet", "mute yourself", "stop talking"), call go_silent right away — don't say anything else after that. You stay connected and still listening only for the word to resume; when you hear "unmute", "you can speak", "resume", or similar, call resume_speaking and go back to normal.
 - If asked to switch to a male or female voice (e.g. "switch to a male voice", "can you sound like a woman"), this is a Settings change, not just a quick action — call switch_voice with "male" or "female". If the response tells you to confirm first, ask warmly (mentioning that it'll update in Settings too) and only call switch_voice again — this time with confirmed set to "true" — once they clearly agree. If it goes ahead right away instead (you're already on the Settings page), just say something brief like "Sure, one moment" before it reconnects.
 - If asked to log out ("log me out", "sign out"), don't call logout immediately — ask first, warmly, e.g. "Just to confirm — would you like me to log you out?" Only call logout once they clearly say yes. If they say no or change their mind, drop it and continue normally.
+- If your opening line just offered a quick rundown of how to talk to you and they say yes ("sure", "go ahead", "yes please"), or if at any later point they ask what they can say, how to use you, or for help, recite the quick keywords below in your own natural words — don't just read the list verbatim — then continue normally. If they said no to the opening offer, just move on warmly, no rundown, and don't offer again this session.
+  QUICK KEYWORDS: "take me to entries" / "open settings" / "show the dashboard" to navigate; "start the form" to begin a voice entry; "let's build a new form" to open the form builder; "turn off/on the [form name] form" to activate or deactivate one; "resend the PDF for [entry]" to resend an email; "mute" or "be quiet" to go quiet, and "unmute" to bring me back; "switch to a male voice" or "switch to a female voice"; "log me out" to sign out.
 - If the request is about actually answering form questions, or doesn't match anything above, gently explain that's handled once a form session starts, not here.`;
 }
 
 /** `submittedFormName`, when given, means a form was just submitted right
  * before this connect (see submission-announcement.ts) — mentioned once,
- * right at the end of the usual opening, then never brought up again. */
-export function buildAmbientFirstMessage(assistantName: string, submittedFormName?: string | null): string {
+ * right at the end of the usual opening, then never brought up again.
+ * `offerInstructions`, when true, means this is the very first ambient
+ * connect after a real login (see instructions-offer.ts) — tacks on a
+ * one-time offer to walk through how to talk to the assistant. */
+export function buildAmbientFirstMessage(
+  assistantName: string,
+  submittedFormName?: string | null,
+  offerInstructions?: boolean
+): string {
   const { quote } = getDailyOpeningQuote();
   const greetingWord = timeOfDayGreeting();
   const selfIntro = `Hi, I'm ${assistantName}.${quote ? ` ${quote}` : ""}`;
   const submissionNote = submittedFormName
     ? ` Also — your ${submittedFormName} entry just went through, nice work!`
     : "";
-  return `${selfIntro} ${greetingWord}! I'm right here whenever you need me — just say the word.${submissionNote}`;
+  const instructionsOffer = offerInstructions
+    ? " By the way, would you like a quick rundown of how to talk to me?"
+    : "";
+  return `${selfIntro} ${greetingWord}! I'm right here whenever you need me — just say the word.${submissionNote}${instructionsOffer}`;
 }
 
 /** Used only when the widget reconnects back to this agent after a stint

@@ -32,6 +32,7 @@ import {
 } from "@/lib/entries-store";
 import { performLogout } from "@/lib/logout";
 import { consumePendingSubmissionAnnouncement } from "@/lib/submission-announcement";
+import { consumePendingInstructionsOffer } from "@/lib/instructions-offer";
 
 const FEMALE_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"; // Rachel
 const MALE_VOICE_ID = "pNInz6obpgDQGcFmaJgB"; // Adam
@@ -486,7 +487,11 @@ function AmbientVoiceWidgetInner() {
         ? buildFormBuilderFirstMessage()
         : isReconnect
           ? buildAmbientResumeMessage()
-          : buildAmbientFirstMessage(assistantName, consumePendingSubmissionAnnouncement());
+          : buildAmbientFirstMessage(
+              assistantName,
+              consumePendingSubmissionAnnouncement(),
+              consumePendingInstructionsOffer()
+            );
       // Marks that the next time conversation.status actually reports
       // "connected" (observed reactively, below), this session still
       // needs its post-connect setup done. Deliberately NOT done right

@@ -4,30 +4,37 @@ import Link from "next/link";
 import {
   Inbox,
   CheckCircle2,
-  Clock,
+  FileEdit,
   Mail,
   Mic,
   ArrowUpRight,
-  ArrowRight,
 } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { StartVoiceFormButton } from "@/components/layout/start-voice-form-button";
 import { EntryStatusBadge } from "@/components/entries/status-badge";
 import { currentUser } from "@/lib/mock-data";
-import { useFormsStore } from "@/lib/forms-store";
 import { useEntriesStore } from "@/lib/entries-store";
 import { timeAgo } from "@/lib/format";
+import { auditLabels, auditIcons } from "@/lib/audit";
 
 function initials(name: string) {
   return name.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
 }
 
 export default function DashboardPage() {
-  const { forms } = useFormsStore();
   const { entries, stats: dashboardStats } = useEntriesStore();
   const recent = [...entries]
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
     .slice(0, 5);
+  // Every audit event across every entry, newest first — real activity
+  // (a PDF generated, an email sent, a draft saved) rather than just a
+  // per-form entry count, and it's reactive to `entries` the same way the
+  // stat cards above are: a brand new form starts here with nothing, and
+  // fills in the moment its first session does anything.
+  const activity = entries
+    .flatMap((entry) => entry.audit.map((event) => ({ event, entry })))
+    .sort((a, b) => +new Date(b.event.timestamp) - +new Date(a.event.timestamp))
+    .slice(0, 8);
 
   return (
     <div className="flex flex-col gap-6 pt-6">
@@ -65,8 +72,8 @@ export default function DashboardPage() {
           tone="lime"
         />
         <StatCard
-          icon={Clock}
-          label="Pending / In Progress"
+          icon={FileEdit}
+          label="Draft"
           value={dashboardStats.pendingEntries}
           tone="warn"
         />
@@ -144,40 +151,43 @@ export default function DashboardPage() {
               Form activity
             </h2>
           </div>
-          <div className="flex flex-col gap-1">
-            {forms.map((form) => {
-              const count = entries.filter(
-                (e) => e.formId === form.id
-              ).length;
-              const max = Math.max(...forms.map((f) =>
-                entries.filter((e) => e.formId === f.id).length
-              ), 1);
+          <div className="flex flex-col">
+            {activity.map(({ event, entry }) => {
+              const Icon = auditIcons[event.type];
               return (
                 <Link
-                  key={form.id}
-                  href={`/entries?form=${form.formId}`}
-                  className="group flex items-center justify-between gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-background"
+                  // event.id is only unique within one entry's own audit
+                  // array (seed data reuses "a1", "a2"... per entry) —
+                  // this feed flattens events across every entry, so it
+                  // needs the entry folded into the key too.
+                  key={`${entry.id}-${event.id}`}
+                  href={`/entries/${entry.id}`}
+                  className="flex items-start gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-background"
                 >
+                  <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-background text-muted-foreground">
+                    <Icon className="size-3.5" />
+                  </span>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <span className="truncate text-sm font-medium text-foreground">
-                        {form.name}
+                        {auditLabels[event.type]}
                       </span>
-                      <span className="ml-2 shrink-0 text-xs text-muted-foreground">
-                        {count}
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {timeAgo(event.timestamp)}
                       </span>
                     </div>
-                    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-border/70">
-                      <div
-                        className="h-full rounded-full bg-lime"
-                        style={{ width: `${(count / max) * 100}%` }}
-                      />
+                    <div className="truncate text-xs text-muted-foreground">
+                      {entry.formName} · {event.message}
                     </div>
                   </div>
-                  <ArrowRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                 </Link>
               );
             })}
+            {activity.length === 0 && (
+              <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+                No activity yet — it&apos;ll show up here as entries move through the workflow.
+              </p>
+            )}
           </div>
         </div>
       </div>

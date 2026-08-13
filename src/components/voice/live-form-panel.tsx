@@ -164,7 +164,11 @@ function FieldControl({
     return (
       <div className="flex flex-col gap-1">
         <Select
-          value={typeof value === "string" ? value : undefined}
+          // Always a real string, even before anything's answered — an
+          // undefined value here leaves the Select uncontrolled on first
+          // render, then flips to controlled the moment a real value
+          // lands, which React (rightly) warns about.
+          value={typeof value === "string" ? value : ""}
           onValueChange={(v) => onChange(v)}
         >
           <SelectTrigger className="h-9 w-full rounded-lg bg-background text-sm">

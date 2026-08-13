@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { unlockAudioPlayback } from "@/lib/audio-unlock";
+import { markJustLoggedIn } from "@/lib/instructions-offer";
 
 export default function LoginPage() {
   return (
@@ -45,6 +46,10 @@ function LoginPageContent() {
         setError(data?.error || "Incorrect email or password");
         return;
       }
+      // Flagged here, consumed by the ambient widget's very first connect
+      // after this — so the offer happens once per real login, not on
+      // every later reconnect (switching voices, form-builder round trips).
+      markJustLoggedIn();
       const next = searchParams.get("next") || "/dashboard";
       router.push(next);
       router.refresh();

@@ -21,21 +21,7 @@ import { useEntriesStore, resolveRecipientEmail } from "@/lib/entries-store";
 import { useFormsStore } from "@/lib/forms-store";
 import { formatAnswerValue, isEntryComplete } from "@/lib/form-utils";
 import { formatDateTime } from "@/lib/format";
-import type { AuditEvent } from "@/types";
-
-const auditLabels: Record<AuditEvent["type"], string> = {
-  session_started: "Session Started",
-  question_asked: "Question Asked",
-  answer_captured: "Answer Captured",
-  answer_corrected: "Answer Corrected",
-  field_manually_edited: "Field Manually Edited",
-  form_completed: "Form Completed",
-  entry_created: "Entry Created",
-  pdf_generated: "PDF Generated",
-  email_sent: "Email Sent",
-  email_failed: "Email Failed",
-  email_resent: "Email Resent",
-};
+import { auditLabels } from "@/lib/audit";
 
 export default function EntryDetailPage(props: PageProps<"/entries/[entryId]">) {
   const { entryId } = use(props.params);

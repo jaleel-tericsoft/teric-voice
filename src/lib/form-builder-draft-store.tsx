@@ -75,11 +75,34 @@ export function needsOptions(type: FieldType): boolean {
   return type === "single_select" || type === "multi_select";
 }
 
+/** Returns a namer that keeps every fieldName it's asked for unique — the
+ * first call for a given base name gets it as-is, every later call for
+ * the same base gets "_2", "_3", ... appended. Two questions whose text
+ * happens to slugify to the same name (typed into two different
+ * sections, most often) would otherwise silently share one answer slot
+ * end-to-end — the same EntryAnswer.fieldName, the same Entries table
+ * column, the same record_answer target — so this has to run everywhere
+ * a fieldName is finalized, not just wherever renders first. A fresh
+ * namer per call site (computeAllFields, save()) is fine since both walk
+ * the same sections in the same order and so land on the same result. */
+function createFieldNamer(): (base: string) => string {
+  const seen = new Map<string, number>();
+  return (base: string) => {
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    return count === 0 ? base : `${base}_${count + 1}`;
+  };
+}
+
 export function computeAllFields(sections: DraftSection[]): { fieldName: string; label: string }[] {
+  const uniqueFieldName = createFieldNamer();
   return sections.flatMap((s) =>
     s.questions
       .filter((q) => q.questionText.trim())
-      .map((q) => ({ fieldName: q.fieldName ?? slugify(q.questionText), label: q.questionText }))
+      .map((q) => ({
+        fieldName: uniqueFieldName(q.fieldName ?? slugify(q.questionText)),
+        label: q.questionText,
+      }))
   );
 }
 
@@ -262,6 +285,7 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
         return { ok: false, message: "Add at least one question with some text before saving." };
       }
 
+      const uniqueFieldName = createFieldNamer();
       const builtSections: FormSection[] = sections
         .filter((s) => s.questions.some((q) => q.questionText.trim()))
         .map((s, si) => ({
@@ -273,7 +297,7 @@ export function FormBuilderDraftProvider({ children }: { children: ReactNode }) 
             .map((q, qi) => ({
               id: q.id,
               order: qi + 1,
-              fieldName: q.fieldName ?? slugify(q.questionText),
+              fieldName: uniqueFieldName(q.fieldName ?? slugify(q.questionText)),
               questionText: q.questionText.trim(),
               fieldType: q.fieldType,
               required: q.required,

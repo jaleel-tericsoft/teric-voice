@@ -7,37 +7,41 @@ import { performLogout } from "@/lib/logout";
 // Same localStorage-preference convention as getVoiceGender/setVoiceGender
 // in voice-client.ts — a plain string under a namespaced key, read
 // defensively (window may not exist yet during SSR/first paint).
-const IDLE_TIMEOUT_STORAGE_KEY = "tericvoice:idle-timeout-minutes";
+const IDLE_TIMEOUT_STORAGE_KEY = "tericvoice:idle-timeout-seconds";
 
-export const IDLE_TIMEOUT_OPTIONS_MINUTES = [1, 2, 5] as const;
-export type IdleTimeoutMinutes = (typeof IDLE_TIMEOUT_OPTIONS_MINUTES)[number];
-const DEFAULT_IDLE_TIMEOUT_MINUTES: IdleTimeoutMinutes = 5;
+export const IDLE_TIMEOUT_OPTIONS_SECONDS = [10, 30, 60, 90] as const;
+export type IdleTimeoutSeconds = (typeof IDLE_TIMEOUT_OPTIONS_SECONDS)[number];
+const DEFAULT_IDLE_TIMEOUT_SECONDS: IdleTimeoutSeconds = 30;
 
 // A wearable/glasses device left running is easy to forget about, so this
 // is the app-wide safety net — it does not run on /voice/[entryId], which
 // sits outside the (app) layout and is already an actively-attended,
 // immersive session in its own right.
-export function getIdleTimeoutMinutes(): IdleTimeoutMinutes {
-  if (typeof window === "undefined") return DEFAULT_IDLE_TIMEOUT_MINUTES;
+export function getIdleTimeoutSeconds(): IdleTimeoutSeconds {
+  if (typeof window === "undefined") return DEFAULT_IDLE_TIMEOUT_SECONDS;
   const raw = Number(window.localStorage.getItem(IDLE_TIMEOUT_STORAGE_KEY));
-  return IDLE_TIMEOUT_OPTIONS_MINUTES.includes(raw as IdleTimeoutMinutes)
-    ? (raw as IdleTimeoutMinutes)
-    : DEFAULT_IDLE_TIMEOUT_MINUTES;
+  return IDLE_TIMEOUT_OPTIONS_SECONDS.includes(raw as IdleTimeoutSeconds)
+    ? (raw as IdleTimeoutSeconds)
+    : DEFAULT_IDLE_TIMEOUT_SECONDS;
 }
 
-export function setIdleTimeoutMinutes(minutes: IdleTimeoutMinutes): void {
+export function setIdleTimeoutSeconds(seconds: IdleTimeoutSeconds): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(IDLE_TIMEOUT_STORAGE_KEY, String(minutes));
+  window.localStorage.setItem(IDLE_TIMEOUT_STORAGE_KEY, String(seconds));
 }
 
-// Only the final stretch before logout should be visible — anything wider
-// and the countdown becomes a permanent, distracting fixture instead of a
-// "you're about to be logged out" warning. Matches the plan's agreed UX.
-const WARNING_WINDOW_SECONDS = 30;
+// The final warning shouldn't outlast the countdown itself — at the
+// shortest option (10s) a flat 30s warning window would cover the entire
+// timeout, defeating the point of a "final stretch" notice. Scaled to a
+// third of the total instead, with a 3s floor and the original 30s cap.
+function warningWindowSeconds(totalSeconds: number): number {
+  return Math.min(30, Math.max(3, Math.floor(totalSeconds / 3)));
+}
+
 const ACTIVITY_EVENTS = ["mousemove", "keydown", "click", "touchstart", "scroll"] as const;
 const TICK_MS = 1000;
 
-/** Tracks user activity app-wide and auto-logs-out after N idle minutes
+/** Tracks user activity app-wide and auto-logs-out after N idle seconds
  * (configurable in Settings). Returns the remaining seconds only once
  * inside the final warning window — null the rest of the time, so callers
  * can cheaply decide whether to render anything at all. */
@@ -74,7 +78,8 @@ export function useIdleLogout() {
   useEffect(() => {
     const interval = window.setInterval(async () => {
       if (loggingOutRef.current || lastActivityRef.current === null) return;
-      const timeoutMs = getIdleTimeoutMinutes() * 60 * 1000;
+      const totalSeconds = getIdleTimeoutSeconds();
+      const timeoutMs = totalSeconds * 1000;
       const idleMs = Date.now() - lastActivityRef.current;
       const remainingMs = timeoutMs - idleMs;
 
@@ -87,7 +92,8 @@ export function useIdleLogout() {
       }
 
       const remainingSeconds = Math.ceil(remainingMs / 1000);
-      setWarningSecondsLeft(remainingSeconds <= WARNING_WINDOW_SECONDS ? remainingSeconds : null);
+      const warnAt = warningWindowSeconds(totalSeconds);
+      setWarningSecondsLeft(remainingSeconds <= warnAt ? remainingSeconds : null);
     }, TICK_MS);
     return () => window.clearInterval(interval);
   }, [router]);

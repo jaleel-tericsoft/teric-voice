@@ -17,10 +17,10 @@ import {
 import { cn } from "@/lib/utils";
 import { organization } from "@/lib/mock-data";
 import {
-  IDLE_TIMEOUT_OPTIONS_MINUTES,
-  getIdleTimeoutMinutes,
-  setIdleTimeoutMinutes,
-  type IdleTimeoutMinutes,
+  IDLE_TIMEOUT_OPTIONS_SECONDS,
+  getIdleTimeoutSeconds,
+  setIdleTimeoutSeconds,
+  type IdleTimeoutSeconds,
 } from "@/lib/use-idle-logout";
 
 const sections = [
@@ -265,7 +265,7 @@ function SecuritySection() {
   // Reads straight from localStorage on mount rather than a store — this
   // is a lone client-only preference, same convention as voice gender,
   // and the idle-logout hook reads the exact same key independently.
-  const [minutes, setMinutes] = useState<IdleTimeoutMinutes>(() => getIdleTimeoutMinutes());
+  const [seconds, setSeconds] = useState<IdleTimeoutSeconds>(() => getIdleTimeoutSeconds());
 
   return (
     <div>
@@ -276,16 +276,16 @@ function SecuritySection() {
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <Field label="Auto-logout after inactivity">
           <Select
-            value={String(minutes)}
-            onValueChange={(v) => setMinutes(Number(v) as IdleTimeoutMinutes)}
+            value={String(seconds)}
+            onValueChange={(v) => setSeconds(Number(v) as IdleTimeoutSeconds)}
           >
             <SelectTrigger className="w-full rounded-xl">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {IDLE_TIMEOUT_OPTIONS_MINUTES.map((m) => (
-                <SelectItem key={m} value={String(m)}>
-                  {m} {m === 1 ? "minute" : "minutes"}
+              {IDLE_TIMEOUT_OPTIONS_SECONDS.map((s) => (
+                <SelectItem key={s} value={String(s)}>
+                  {s} seconds
                 </SelectItem>
               ))}
             </SelectContent>
@@ -293,7 +293,7 @@ function SecuritySection() {
         </Field>
       </div>
       <div className="mt-8 flex justify-end border-t border-border/60 pt-5">
-        <Button className="rounded-full" onClick={() => setIdleTimeoutMinutes(minutes)}>
+        <Button className="rounded-full" onClick={() => setIdleTimeoutSeconds(seconds)}>
           Save Changes
         </Button>
       </div>

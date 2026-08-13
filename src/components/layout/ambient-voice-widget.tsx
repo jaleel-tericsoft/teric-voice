@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useConversation, ConversationProvider } from "@elevenlabs/react";
 import { Mic, MicOff, Settings2 } from "lucide-react";
@@ -58,15 +58,16 @@ function asDirection(v: unknown): MoveDirection | null {
 }
 
 /** Always-on ambient assistant, present on every authenticated page (see
- * (app)/layout.tsx) — a small floating panel on the right edge of the
- * screen, styled like the voice-filling experience's own control bar
+ * (app)/layout.tsx) — a small floating panel anchored to the bottom-right
+ * corner, styled like the voice-filling experience's own control bar
  * (voice-experience.tsx), distinct from that agent entirely. Connects to
  * a second ElevenLabs agent (?agent=ambient) with its own tool set:
  * navigation, starting/building forms, activating/deactivating forms,
- * resending a customer's PDF email, going quiet on request, and logout.
- * While on /form-builder/new specifically, it reconnects to a *third*
- * agent (?agent=form-builder) scoped to voice-driven form building, then
- * reconnects back the moment the user navigates away. */
+ * resending a customer's PDF email, switching voice, going quiet on
+ * request, and logout. While on /form-builder/new specifically, it
+ * reconnects to a *third* agent (?agent=form-builder) scoped to
+ * voice-driven form building, then reconnects back the moment the user
+ * navigates away. */
 export function AmbientVoiceWidget() {
   return (
     <ConversationProvider>
@@ -95,7 +96,9 @@ function AmbientVoiceWidgetInner() {
   // Client tool closures run inside the SDK's own event handling, not a
   // React render — same stale-closure-avoidance pattern as
   // voice-experience.tsx: mirror the latest store data into refs so the
-  // long-lived tool handlers below always read current data.
+  // long-lived tool handlers below always read current data. This is now
+  // load-bearing for more than staleness, too — see the note above
+  // `clientTools` on why every one of these has to be ref-based.
   const formsRef = useRef(forms);
   useEffect(() => {
     formsRef.current = forms;
@@ -108,19 +111,53 @@ function AmbientVoiceWidgetInner() {
   useEffect(() => {
     draftStoreRef.current = draftStore;
   }, [draftStore]);
+  const pathnameRef = useRef(pathname);
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+  const isFormBuilderNewRef = useRef(isFormBuilderNew);
+  useEffect(() => {
+    isFormBuilderNewRef.current = isFormBuilderNew;
+  }, [isFormBuilderNew]);
+  const languageRef = useRef(language);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+  // The conversation object itself changes identity on essentially every
+  // render (its own mode/status are part of what triggers those renders),
+  // so anything that needs to call its methods from a handler that isn't
+  // itself recreated every render (see clientTools below) has to go
+  // through this instead of closing over `conversation` directly.
+  const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
-  const conversation = useConversation({
-    onError: (message) => {
-      console.error("[ambient] agent session error", message);
-      setConnectError(message);
-    },
-    clientTools: {
+  // clientTools was previously an inline object literal passed straight
+  // into useConversation() below — recreated fresh on *every* render.
+  // Because this widget wraps the whole authenticated app, it re-renders
+  // far more often than voice-experience.tsx ever does (any change to
+  // forms/entries/the form-builder draft, anywhere in the app, plus every
+  // mode/status change of its own live session), and hooks like this one
+  // often tear down and re-establish their underlying connection when the
+  // tools/config identity changes between renders. That's what was
+  // actually behind "goes off and reconnects on its own, and keeps ending
+  // up muted" — each unwanted reconnect ran connectAmbientSession, which
+  // (correctly, on a real reconnect) starts the session muted, but here
+  // it was happening constantly. Memoizing this with an empty dependency
+  // array gives the SDK one stable object for the widget's whole
+  // lifetime; every handler below reads current data through a ref
+  // instead of a closed-over value, precisely so that "stable forever" is
+  // safe rather than "frozen with stale data forever".
+  const clientTools = useMemo(
+    () => ({
       // --- Ambient-mode tools (agent=ambient) ---
       navigate_to: async (params: { page?: string }) => {
         const key = (params.page ?? "").trim().toLowerCase().replace(/\s+/g, "-");
         const target = PAGE_ROUTES[key];
         if (!target) {
           return 'Unknown page — must be one of: dashboard, entries, form-builder, settings.';
+        }
+        const current = pathnameRef.current ?? "";
+        if (current === target || current.startsWith(`${target}/`)) {
+          return "We're already here.";
         }
         router.push(target);
         return `Navigating to ${params.page}.`;
@@ -194,6 +231,21 @@ function AmbientVoiceWidgetInner() {
         upsertEntry(withEmailResent(withCustomerEmail(entry, email), email));
         return `Got it — sent the PDF to ${email}.`;
       },
+      switch_voice: async (params: { gender?: string }) => {
+        const gender: VoiceGender | null =
+          params.gender === "male" ? "male" : params.gender === "female" ? "female" : null;
+        if (!gender) return 'Unknown gender — must be "male" or "female".';
+        setVoiceGenderState(gender);
+        setVoiceGender(gender);
+        // Same brief delay as voice-experience.tsx's own switch_voice —
+        // gives this tool's spoken return value a moment to actually play
+        // before endSession/startSession tears the session down.
+        window.setTimeout(() => {
+          conversationRef.current?.endSession();
+          connectAmbientSession(isFormBuilderNewRef.current, true, undefined, gender);
+        }, 600);
+        return `Switching to a ${gender} voice now.`;
+      },
       // Prompt requires a spoken confirmation before this ever gets
       // called (see ambient-agent-prompt.ts) — by the time it's called,
       // the user has already said yes, so it acts immediately.
@@ -207,12 +259,12 @@ function AmbientVoiceWidgetInner() {
       // --- Silence, shared by both agents (ambient + form-builder) ---
       go_silent: async () => {
         setSilenced(true);
-        conversation.setVolume({ volume: 0 });
+        conversationRef.current?.setVolume({ volume: 0 });
         return "ok";
       },
       resume_speaking: async () => {
         setSilenced(false);
-        conversation.setVolume({ volume: 1 });
+        conversationRef.current?.setVolume({ volume: 1 });
         return "I'm back.";
       },
 
@@ -314,14 +366,55 @@ function AmbientVoiceWidgetInner() {
         if (result.ok) router.push("/form-builder");
         return result.message;
       },
+    }),
+    // Deliberately empty — every handler above reads current data via a
+    // ref (or a stable setState setter), never a closed-over value, so
+    // this object never needs to change identity. See the comment above
+    // clientTools for why that stability is the point.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const conversation = useConversation({
+    onError: (message) => {
+      console.error("[ambient] agent session error", message);
+      setConnectError(message);
     },
+    clientTools,
   });
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
+
+  // See connectAmbientSession's comment on why this is deferred to a
+  // reactive "status just became connected" effect instead of running
+  // right after startSession()'s promise resolves.
+  const needsPostConnectSetupRef = useRef(false);
+  useEffect(() => {
+    if (conversation.status !== "connected" || !needsPostConnectSetupRef.current) return;
+    needsPostConnectSetupRef.current = false;
+    // Fresh session: neither of these should carry over from before.
+    setSilenced(false);
+    conversation.setVolume({ volume: 1 });
+    // Start muted and let the speaking/listening effect below do the
+    // unmuting once the greeting actually finishes — closes the race
+    // where the agent's own opening line could start playing before
+    // React has even seen the first "speaking" mode update, which is
+    // exactly how this widget was overhearing (and acting on) its own
+    // voice right after connecting.
+    conversation.setMuted(true);
+  }, [conversation.status, conversation]);
 
   // A function declaration (not `const`), same reasoning as
   // voice-experience.tsx's connectSession: it's invoked from the
   // auto-connect effect, the mode-change effect, the settings popover,
-  // and the orb's click handler (the manual-retry path), so it can't live
-  // inside just one of them. `builderMode` picks which of the two agents
+  // switch_voice above, and the orb's click handler (the manual-retry
+  // path), so it can't live inside just one of them. It only ever talks
+  // to the SDK through conversationRef, same reasoning as clientTools —
+  // switch_voice's reference to this function is itself effectively
+  // "frozen" at first-render (captured once, inside the memoized
+  // clientTools), so anything it touches has to be ref-safe too, not just
+  // its own direct SDK calls. `builderMode` picks which of the two agents
   // to connect to; `isReconnect` (a same-conversation continuation, not
   // the very first connect of the session) picks a short transition line
   // instead of the full name+quote self-introduction. The two overrides
@@ -345,7 +438,7 @@ function AmbientVoiceWidgetInner() {
       }
       const { signedUrl } = await res.json();
       const gender = genderOverride ?? getVoiceGender();
-      const lang = languageOverride ?? language;
+      const lang = languageOverride ?? languageRef.current;
       const assistantName = getAssistantName(gender);
       const voiceId = gender === "male" ? MALE_VOICE_ID : FEMALE_VOICE_ID;
       const prompt = builderMode
@@ -356,7 +449,16 @@ function AmbientVoiceWidgetInner() {
         : isReconnect
           ? buildAmbientResumeMessage()
           : buildAmbientFirstMessage(assistantName);
-      await conversation.startSession({
+      // Marks that the next time conversation.status actually reports
+      // "connected" (observed reactively, below), this session still
+      // needs its post-connect setup done. Deliberately NOT done right
+      // here, immediately after this await resolves — the SDK's own
+      // internal "active conversation" state hadn't always caught up by
+      // that point, and calling setVolume/setMuted a beat too early threw
+      // "No active conversation. Call startSession() first." even though
+      // startSession() itself had already resolved without error.
+      needsPostConnectSetupRef.current = true;
+      await conversationRef.current?.startSession({
         signedUrl,
         overrides: {
           agent: {
@@ -367,22 +469,12 @@ function AmbientVoiceWidgetInner() {
           tts: { voiceId },
         },
       });
-      // Fresh session: neither of these should carry over from before.
-      setSilenced(false);
-      conversation.setVolume({ volume: 1 });
-      // Start muted and let the speaking/listening effect below do the
-      // unmuting once the greeting actually finishes — closes the race
-      // where the agent's own opening line could start playing before
-      // React has even seen the first "speaking" mode update, which is
-      // exactly how this widget was overhearing (and acting on) its own
-      // voice right after connecting.
-      conversation.setMuted(true);
     } catch (err) {
+      console.error("[ambient] connect failed", err);
       setConnectError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  const connectedRef = useRef(false);
   useEffect(() => {
     // Auto-connects once, the moment this widget first mounts (which,
     // mounted at the (app) layout level, means right after login lands on
@@ -390,12 +482,27 @@ function AmbientVoiceWidgetInner() {
     // unlocked autoplay (see audio-unlock.ts). Picks up whichever agent
     // matches wherever the user actually landed (e.g. a direct link or
     // refresh straight into /form-builder/new).
-    if (connectedRef.current) return;
-    connectedRef.current = true;
-    connectAmbientSession(isFormBuilderNew, false);
+    //
+    // Deferred by a tick (and cancellable) specifically to survive React
+    // StrictMode's dev-only mount→cleanup→mount double-invoke unharmed:
+    // without this, the *first* (soon-to-be-discarded) invocation's
+    // cleanup called endSession() while that same invocation's connect
+    // was still in flight, and the SDK appears to honor that disconnect
+    // the moment the real connection actually completes a beat later —
+    // surfacing as "connects, starts speaking, then immediately
+    // disconnects" on every fresh load. Deferring the connect past the
+    // StrictMode dance (and cancelling it if cleanup fires first) means
+    // the earliest possible endSession() call always lands on a session
+    // that never started, instead of one that's mid-handshake.
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (!cancelled) connectAmbientSession(isFormBuilderNew, false);
+    }, 0);
 
     return () => {
-      conversation.endSession();
+      cancelled = true;
+      window.clearTimeout(timer);
+      conversationRef.current?.endSession();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -410,9 +517,8 @@ function AmbientVoiceWidgetInner() {
   useEffect(() => {
     if (prevIsFormBuilderRef.current === isFormBuilderNew) return;
     prevIsFormBuilderRef.current = isFormBuilderNew;
-    conversation.endSession();
+    conversationRef.current?.endSession();
     connectAmbientSession(isFormBuilderNew, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFormBuilderNew]);
 
   // Keeps the mic muted for as long as the assistant is the one talking,
@@ -483,12 +589,11 @@ function AmbientVoiceWidgetInner() {
     // gets a manual way back in — clicking just re-runs the same connect
     // logic for whichever mode applies right now.
     if (conversation.status === "connected") return;
-    connectedRef.current = true;
     connectAmbientSession(isFormBuilderNew, false);
   }
 
   return (
-    <div className="fixed right-5 top-1/2 z-40 -translate-y-1/2">
+    <div className="fixed right-5 bottom-5 z-40">
       <div className="flex flex-col items-center gap-3 rounded-3xl bg-[#0b1f33] px-4 py-4 text-white shadow-lg">
         <Tooltip>
           <TooltipTrigger asChild>

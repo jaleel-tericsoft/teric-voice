@@ -461,13 +461,6 @@ function AmbientVoiceWidgetInner() {
     // Fresh session: neither of these should carry over from before.
     setSilenced(false);
     conversation.setVolume({ volume: 1 });
-    // Start muted and let the speaking/listening effect below do the
-    // unmuting once the greeting actually finishes — closes the race
-    // where the agent's own opening line could start playing before
-    // React has even seen the first "speaking" mode update, which is
-    // exactly how this widget was overhearing (and acting on) its own
-    // voice right after connecting.
-    conversation.setMuted(true);
   }, [conversation.status, conversation]);
 
   // A function declaration (not `const`), same reasoning as
@@ -613,23 +606,12 @@ function AmbientVoiceWidgetInner() {
     return () => window.removeEventListener(VOICE_PREFERENCE_CHANGED_EVENT, handlePreferenceChange);
   }, []);
 
-  // Keeps the mic muted for as long as the assistant is the one talking,
-  // unmuting again the instant it's done — this is what stops the widget
-  // from hearing (and sometimes acting on) its own TTS bleeding back into
-  // an open mic, the same self-triggering that made it look like the app
-  // was "jumping straight to a form" right after login. A manual mute via
-  // the button below wins over this — it won't auto-unmute until the user
-  // taps it back on themselves.
-  const userMutedRef = useRef(false);
-  useEffect(() => {
-    if (conversation.status !== "connected") return;
-    if (conversation.mode === "speaking") {
-      if (!conversation.isMuted) conversation.setMuted(true);
-    } else if (conversation.mode === "listening" && !userMutedRef.current) {
-      if (conversation.isMuted) conversation.setMuted(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.mode, conversation.status]);
+  // The user's mic is never auto-muted, in either direction — they can
+  // always interrupt the assistant mid-answer, the same as talking over
+  // a person. The only muting that ever happens is the assistant muting
+  // *itself* on request (go_silent/resume_speaking, above, which lowers
+  // its own output volume rather than touching the mic at all) or the
+  // user choosing to mute themselves via the button below.
 
   // onError can fire with a transient, non-fatal warning even on a
   // connection that's otherwise fine (conversation.status genuinely says
@@ -697,11 +679,7 @@ function AmbientVoiceWidgetInner() {
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onClick={() => {
-                  const next = !conversation.isMuted;
-                  userMutedRef.current = next;
-                  conversation.setMuted(next);
-                }}
+                onClick={() => conversation.setMuted(!conversation.isMuted)}
                 aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
                 className={muteButtonClass(conversation.isMuted)}
               >

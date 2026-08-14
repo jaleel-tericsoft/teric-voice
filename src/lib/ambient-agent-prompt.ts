@@ -8,7 +8,12 @@
 // it's a snapshot: if a form gets added or renamed mid-session, the
 // already-connected widget won't know until its next reconnect.
 
-import { getDailyOpeningQuote, timeOfDayGreeting } from "@/lib/voice-session-opening";
+import {
+  getDailyOpeningQuote,
+  timeOfDayGreeting,
+  hasIntroducedSelf,
+  markIntroducedSelf,
+} from "@/lib/voice-session-opening";
 import type { FormDefinition } from "@/types";
 
 export function buildAmbientAgentPrompt(assistantName: string, forms: FormDefinition[]): string {
@@ -53,14 +58,21 @@ export function buildAmbientFirstMessage(
 ): string {
   const { quote } = getDailyOpeningQuote();
   const greetingWord = timeOfDayGreeting();
-  const selfIntro = `Hi, I'm ${assistantName}.${quote ? ` ${quote}` : ""}`;
+  // Normally the very first agent to connect after login, so this is
+  // almost always the one doing the real introduction — but checked
+  // anyway for the rare case something else (a direct link, a retry)
+  // got there first, so it's never repeated. See voice-agent-prompt.ts's
+  // buildFirstMessage for the other half of this.
+  const alreadyIntroduced = hasIntroducedSelf();
+  if (!alreadyIntroduced) markIntroducedSelf();
+  const selfIntro = alreadyIntroduced ? "" : `Hi, I'm ${assistantName}.${quote ? ` ${quote}` : ""} `;
   const submissionNote = submittedFormName
     ? ` Also — your ${submittedFormName} entry just went through, nice work!`
     : "";
   const instructionsOffer = offerInstructions
     ? " By the way, would you like a quick rundown of how to talk to me?"
     : "";
-  return `${selfIntro} ${greetingWord}! I'm right here whenever you need me — just say the word.${submissionNote}${instructionsOffer}`;
+  return `${selfIntro}${greetingWord}! I'm right here whenever you need me — just say the word.${submissionNote}${instructionsOffer}`;
 }
 
 /** Used only when the widget reconnects back to this agent after a stint

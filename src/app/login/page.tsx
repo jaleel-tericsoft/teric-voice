@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { unlockAudioPlayback } from "@/lib/audio-unlock";
 import { markJustLoggedIn } from "@/lib/instructions-offer";
+import { resetIntroducedSelf } from "@/lib/voice-session-opening";
 
 export default function LoginPage() {
   return (
@@ -50,6 +51,9 @@ function LoginPageContent() {
       // after this — so the offer happens once per real login, not on
       // every later reconnect (switching voices, form-builder round trips).
       markJustLoggedIn();
+      // A fresh login always gets a real "Hi, I'm X" introduction, even
+      // if this same browser tab had one from an earlier session.
+      resetIntroducedSelf();
       const next = searchParams.get("next") || "/dashboard";
       router.push(next);
       router.refresh();

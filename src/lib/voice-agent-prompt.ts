@@ -14,7 +14,7 @@
 // always sees regardless of overrides.
 
 import { getAllQuestions } from "@/lib/form-utils";
-import { timeOfDayGreeting } from "@/lib/voice-session-opening";
+import { timeOfDayGreeting, hasIntroducedSelf, markIntroducedSelf } from "@/lib/voice-session-opening";
 import type { AnswerMap } from "@/components/voice/live-form-panel";
 import type { FormDefinition, FormQuestion } from "@/types";
 
@@ -119,10 +119,8 @@ GENERAL RULES:
 - Two different tools for two different ways someone wants to stop, don't mix them up:
   - If the user needs to step away but plans to come back and finish (an emergency, they're busy, anything urgent, "let me finish this later"), call save_draft_and_exit immediately without asking anything else, then say one short reassuring sentence confirming their answers are saved as a draft, and stop.
   - If the user simply doesn't want to fill this out right now and gives no sign they'll be back soon ("never mind", "cancel this", "I don't want to do this", "not in the mood"), call discard_entry instead — nothing gets saved. Say one short warm sentence confirming it's been discarded and they can always start again whenever they're ready, then stop.
-- If the user goes quiet after you ask something, don't say anything for at least 30 full seconds of real silence — give them a real moment before assuming they've gone somewhere. Then check in once, warmly and unhurried, never urgent, and in that same turn tell them plainly what happens next so nothing feels sudden: "Just checking — are you still there? If I don't hear back in the next 30 seconds, I'll need to log you out for security." If at least one answer is already recorded this session, add "— don't worry, I'll save what we have as a draft first" so they know their work isn't lost.
-- Then actually wait up to 30 more seconds. The instant the user responds at any point in this sequence, drop it completely and continue the conversation normally — never mention the timer again once they're back.
-- If those 30 seconds pass with still no response, call logout (no need to ask again — you already told them it was coming; it saves whatever's been answered as a draft on its own before signing out). Say one short, warm sign-off right before calling it, matching what you already told them, e.g. "Logging you out now for security — see you next time!"
-- Never repeat the question itself as part of this sequence — the one check-in above is the only thing you say while waiting.
+- Silence handling is timed by the app itself, not by you — you have no real sense of elapsed seconds, so don't try to count silence or decide on your own when to check in. Instead, you may receive a contextual note telling you the user has gone quiet for a while; when that happens, check in right then, warmly and calmly in one short sentence (something like "Just checking — are you still there?"), and mention the logout warning it asks you to give, in your own words. If they respond at any point, drop it completely and continue normally — never mention the timer again once they're back, and never bring it up yourself unprompted.
+- The actual logout after continued silence happens automatically in the app — you don't need to call logout for it and won't be asked to.
 - If the user explicitly asks to log out or sign out mid-session (not the silence timeout above — an actual spoken request), don't call logout immediately — ask first, warmly, e.g. "Just to confirm — would you like me to log you out? I'll save what you've answered so far as a draft first." Only call logout once they clearly say yes; if they say no, drop it and continue normally.
 - Once every question below has been asked (or skipped/left optional), read back a brief natural-language summary of the answers given so far and ask the user to confirm. Only call submit_form after they explicitly confirm it's correct — never call it mid-conversation.
 - If the user asks what they can say, how to talk to you, or for help: answer in one short breath, never a full read-out list — mention just two or three of the most useful things (e.g. "You can say 'repeat that' to hear a question again, or 'skip' if it's optional — and 'mute' any time you want me to be quiet") and let them know there's more if they want it, then continue with the current question. If they ask for more, give another small handful the same way rather than everything at once.
@@ -154,14 +152,30 @@ export function buildFirstMessage(
     }
     return true;
   });
+  // Skip the "Hi, I'm X" + time-of-day greeting entirely if some agent
+  // (almost always the ambient widget, moments earlier at login) has
+  // already done it this session — a real assistant doesn't re-introduce
+  // itself by name every time you hand it a new task. Still marks itself
+  // introduced even when skipping, so a later reconnect (switch_voice,
+  // resuming a draft) doesn't accidentally do the full intro out of turn.
+  const alreadyIntroduced = hasIntroducedSelf();
+  if (!alreadyIntroduced) markIntroducedSelf();
   const greetingWord = timeOfDayGreeting();
-  const selfIntro = `Hi, I'm ${opening.assistantName}.${opening.quote ? ` ${opening.quote}` : ""}`;
+  const selfIntro = alreadyIntroduced
+    ? ""
+    : `Hi, I'm ${opening.assistantName}.${opening.quote ? ` ${opening.quote}` : ""} `;
   if (!next) {
-    return `${selfIntro} ${greetingWord}, and welcome back — hope you're doing well! Looks like everything's already answered, so let's go over it together before you submit.`;
+    return alreadyIntroduced
+      ? "Welcome back — looks like everything's already answered, so let's go over it together before you submit."
+      : `${selfIntro}${greetingWord}, and welcome back — hope you're doing well! Looks like everything's already answered, so let's go over it together before you submit.`;
   }
-  const intro =
-    Object.keys(answers).length > 0
-      ? `${selfIntro} ${greetingWord}, welcome back! Hope you're doing well. Let's pick up right where we left off.`
-      : `${selfIntro} ${greetingWord}! Hope you're doing well today. I'll be asking you a few quick questions to fill out the form — just answer each one as we go.`;
+  const hasProgress = Object.keys(answers).length > 0;
+  const intro = alreadyIntroduced
+    ? hasProgress
+      ? "Let's pick up right where we left off."
+      : "Let's get started — I'll be asking you a few quick questions to fill out the form, just answer each one as we go."
+    : hasProgress
+      ? `${selfIntro}${greetingWord}, welcome back! Hope you're doing well. Let's pick up right where we left off.`
+      : `${selfIntro}${greetingWord}! Hope you're doing well today. I'll be asking you a few quick questions to fill out the form — just answer each one as we go.`;
   return `${intro} ${next.questionText}`;
 }

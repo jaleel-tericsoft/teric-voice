@@ -86,6 +86,35 @@ export function getDailyOpeningQuote(): DailyOpening {
   return { quote, isFirstSessionToday: true };
 }
 
+const INTRODUCED_KEY = "tericvoice:has-introduced-self";
+
+/** Whether ANY agent (ambient or form-filling) has already given the
+ * full "Hi, I'm X" + greeting introduction so far this login. A real
+ * assistant doesn't re-introduce itself by name every time you hand it
+ * a new task — once the ambient widget has said hello right after
+ * login, the form-filling agent starting up moments later shouldn't
+ * repeat the whole self-intro, just get on with it naturally.
+ * sessionStorage rather than the one-shot hand-offs elsewhere in this
+ * file (submission-announcement.ts, instructions-offer.ts) — this one
+ * deliberately stays true for the rest of the tab's login session
+ * instead of being consumed on first read, and login/page.tsx clears it
+ * on every fresh sign-in so a new login always gets a real first
+ * introduction. */
+export function hasIntroducedSelf(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.sessionStorage.getItem(INTRODUCED_KEY) === "true";
+}
+
+export function markIntroducedSelf(): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(INTRODUCED_KEY, "true");
+}
+
+export function resetIntroducedSelf(): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(INTRODUCED_KEY);
+}
+
 /** Spoken the moment a session reconnects with a *different* voice
  * (switch_voice, on either the ambient widget or the form-filling
  * screen) — a proper reintroduction with the day's time-of-day wishes,

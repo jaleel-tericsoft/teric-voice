@@ -257,6 +257,21 @@ function VoiceExperienceInner({
   // opened with a moment ago.
   const dailyOpeningRef = useRef<ReturnType<typeof getDailyOpeningQuote> | null>(null);
 
+  // Silence-escalation state — a real client-side timer, not the agent
+  // trying to count seconds itself (which proved unreliable: the model
+  // has no genuine sense of elapsed wall-clock time, so "wait 30
+  // seconds" as a prompt instruction could fire early or late). Seeded
+  // on connect, reset on every actual user message; the ticker effect
+  // below is the only thing that decides when 30s-of-silence has
+  // genuinely passed.
+  const lastUserActivityRef = useRef<number | null>(null);
+  // Whether the "are you still there" check-in has already been sent
+  // for the current silence stretch — only a real user message clears
+  // this, so it isn't accidentally re-armed by the bot's own reply.
+  const checkedInRef = useRef(false);
+  const checkinAtRef = useRef<number | null>(null);
+  const loggingOutRef = useRef(false);
+
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashHighlight = useCallback((fieldName: string) => {
     setHighlightField(fieldName);
@@ -277,6 +292,28 @@ function VoiceExperienceInner({
       return next;
     });
   }, []);
+
+  // A function declaration (not `const`), same reasoning as
+  // connectSession below — shared by both the logout client tool and the
+  // silence-escalation timer later in this component, so it can't live
+  // inside just one of them. Never two copies of "save whatever's
+  // answered as a draft, then really log out" that could drift apart.
+  async function saveDraftAndLogout() {
+    if (Object.keys(answersRef.current).length > 0) {
+      const entry = buildEntry({
+        id: entryIdRef.current,
+        form,
+        answers: answersRef.current,
+        status: "in_progress",
+        createdAt: createdAtRef.current,
+        previous: resumeEntry,
+      });
+      upsertEntry(entry);
+    }
+    await performLogout();
+    router.push("/login");
+    router.refresh();
+  }
 
   // Previously an inline object literal recreated fresh on every render —
   // memoized for the same reason ambient-voice-widget.tsx's clientTools
@@ -389,26 +426,12 @@ function VoiceExperienceInner({
         router.push("/entries");
         return "Discarded.";
       },
-      // Used for both an explicit spoken "log me out" (confirmed by the
-      // prompt first) and the forced idle-silence timeout below — either
-      // way, whatever's been answered so far is preserved as a draft
-      // first, same as save_draft_and_exit, just followed by an actual
-      // application logout instead of a plain return to /entries.
+      // Used for an explicit spoken "log me out" (confirmed by the
+      // prompt first) — the forced idle-silence timeout is now handled
+      // entirely client-side (see the silence-escalation effect below),
+      // not by asking the agent to call this tool on its own timing.
       logout: async () => {
-        if (Object.keys(answersRef.current).length > 0) {
-          const entry = buildEntry({
-            id: entryIdRef.current,
-            form,
-            answers: answersRef.current,
-            status: "in_progress",
-            createdAt: createdAtRef.current,
-            previous: resumeEntry,
-          });
-          upsertEntry(entry);
-        }
-        await performLogout();
-        router.push("/login");
-        router.refresh();
+        await saveDraftAndLogout();
         return "Logging out now.";
       },
       submit_form: async () => {
@@ -438,6 +461,13 @@ function VoiceExperienceInner({
   const conversation = useConversation({
     onMessage: ({ message, role }) => {
       if (role === "agent") setAssistantText(message);
+      if (role === "user") {
+        // Any real word from the user drops the whole silence-escalation
+        // sequence — never mention the timer again once they're back.
+        lastUserActivityRef.current = Date.now();
+        checkedInRef.current = false;
+        checkinAtRef.current = null;
+      }
     },
     onError: (message) => {
       console.error("[voice] agent session error", message);
@@ -454,23 +484,60 @@ function VoiceExperienceInner({
     conversationRef.current = conversation;
   }, [conversation]);
 
-  // Keeps the mic muted for as long as the assistant is the one talking,
-  // unmuting again the instant it's done — this is what stops the screen
-  // from hearing (and sometimes acting on, or triggering a false
-  // interruption from) its own TTS bleeding back into an open mic. Same
-  // pattern as ambient-voice-widget.tsx. A manual mute via the control
-  // bar's button wins over this — it won't auto-unmute until the user
-  // taps it back on themselves.
-  const userMutedRef = useRef(false);
+  // The user's mic is never auto-muted — they can always interrupt the
+  // assistant mid-answer, the same as talking over a person. The only
+  // muting that ever happens is the assistant muting *itself* on request
+  // (go_silent/resume_speaking, which lowers its own output volume
+  // rather than touching the mic) or the user choosing to mute
+  // themselves via the control bar's button below.
+
+  // Seeds the silence clock the moment the session is actually
+  // connected — before this, there's nothing to measure yet (no
+  // question has been asked to go quiet after).
   useEffect(() => {
-    if (conversation.status !== "connected") return;
-    if (conversation.mode === "speaking") {
-      if (!conversation.isMuted) conversation.setMuted(true);
-    } else if (conversation.mode === "listening" && !userMutedRef.current) {
-      if (conversation.isMuted) conversation.setMuted(false);
+    if (conversation.status === "connected" && lastUserActivityRef.current === null) {
+      lastUserActivityRef.current = Date.now();
     }
+  }, [conversation.status]);
+
+  // The real silence-escalation timer — a plain JS interval, not the
+  // agent's own sense of time (see the refs above for why). Every
+  // second: past 30s of no real user message, send one contextual
+  // nudge so the agent checks in and states the 30-second logout
+  // warning in its own words; past a further 30s with still nothing,
+  // enforce the logout directly in code rather than trusting the agent
+  // to call the tool on its own timing — this is what actually
+  // guarantees the "not a second early, not a second late" behavior a
+  // prompt-only approach couldn't.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (loggingOutRef.current) return;
+      if (conversation.status !== "connected" || phase === "submitting") return;
+      if (lastUserActivityRef.current === null) return;
+
+      const now = Date.now();
+      const idleMs = now - lastUserActivityRef.current;
+
+      if (!checkedInRef.current && idleMs >= 30_000) {
+        checkedInRef.current = true;
+        checkinAtRef.current = now;
+        conversationRef.current?.sendContextualUpdate(
+          "The user has been silent for 30 seconds. Check in on them right now, warmly and calmly, in one short sentence — something like \"Just checking, are you still there?\" — and mention that you'll need to log them out for security if there's no response in the next 30 seconds (reassure them anything already answered will be saved as a draft first). Speak now, don't wait for them."
+        );
+        return;
+      }
+
+      if (checkedInRef.current && checkinAtRef.current !== null && now - checkinAtRef.current >= 30_000) {
+        loggingOutRef.current = true;
+        saveDraftAndLogout();
+      }
+    }, 1000);
+    return () => window.clearInterval(interval);
+    // saveDraftAndLogout intentionally omitted — a hoisted function
+    // declaration that always reads current data via refs, same as
+    // connectSession elsewhere in this file; it doesn't need to be a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.mode, conversation.status]);
+  }, [conversation.status, phase]);
 
   const orbState: OrbState =
     phase === "submitting"
@@ -694,11 +761,7 @@ function VoiceExperienceInner({
                 <X className="size-[18px]" />
               </button>
               <button
-                onClick={() => {
-                  const next = !conversation.isMuted;
-                  userMutedRef.current = next;
-                  conversation.setMuted(next);
-                }}
+                onClick={() => conversation.setMuted(!conversation.isMuted)}
                 className={cn(
                   "flex size-14 items-center justify-center rounded-full transition-colors",
                   conversation.isMuted ? "bg-white/15 text-white" : "bg-teal text-teal-foreground"

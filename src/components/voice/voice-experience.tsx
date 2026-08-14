@@ -454,6 +454,24 @@ function VoiceExperienceInner({
     conversationRef.current = conversation;
   }, [conversation]);
 
+  // Keeps the mic muted for as long as the assistant is the one talking,
+  // unmuting again the instant it's done — this is what stops the screen
+  // from hearing (and sometimes acting on, or triggering a false
+  // interruption from) its own TTS bleeding back into an open mic. Same
+  // pattern as ambient-voice-widget.tsx. A manual mute via the control
+  // bar's button wins over this — it won't auto-unmute until the user
+  // taps it back on themselves.
+  const userMutedRef = useRef(false);
+  useEffect(() => {
+    if (conversation.status !== "connected") return;
+    if (conversation.mode === "speaking") {
+      if (!conversation.isMuted) conversation.setMuted(true);
+    } else if (conversation.mode === "listening" && !userMutedRef.current) {
+      if (conversation.isMuted) conversation.setMuted(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation.mode, conversation.status]);
+
   const orbState: OrbState =
     phase === "submitting"
       ? "idle"
@@ -676,7 +694,11 @@ function VoiceExperienceInner({
                 <X className="size-[18px]" />
               </button>
               <button
-                onClick={() => conversation.setMuted(!conversation.isMuted)}
+                onClick={() => {
+                  const next = !conversation.isMuted;
+                  userMutedRef.current = next;
+                  conversation.setMuted(next);
+                }}
                 className={cn(
                   "flex size-14 items-center justify-center rounded-full transition-colors",
                   conversation.isMuted ? "bg-white/15 text-white" : "bg-teal text-teal-foreground"

@@ -259,17 +259,24 @@ function VoiceExperienceInner({
 
   // Silence-escalation state — a real client-side timer, not the agent
   // trying to count seconds itself (which proved unreliable: the model
-  // has no genuine sense of elapsed wall-clock time, so "wait 30
-  // seconds" as a prompt instruction could fire early or late). Seeded
-  // on connect, reset on every actual user message; the ticker effect
-  // below is the only thing that decides when 30s-of-silence has
-  // genuinely passed.
+  // has no genuine sense of elapsed wall-clock time). Three stages, all
+  // measured from lastUserActivityRef, seeded on connect and reset the
+  // instant any real user message arrives — a genuine interruption at
+  // any point during any of this resets the whole sequence back to
+  // normal, nothing more is said about it:
+  //   10s  -> a brief, bare "are you still there?" check-in, nothing
+  //           about logging out yet.
+  //   30s  -> the actual warning: logging out in 30 more seconds,
+  //           answers saved as a draft first. This is also the instant
+  //           the final 30s countdown starts.
+  //   60s  -> (30s after the warning) a short final sign-off, then the
+  //           app itself performs the logout. Nothing is said at all in
+  //           the stretch between the 30s warning and this point.
   const lastUserActivityRef = useRef<number | null>(null);
-  // Whether the "are you still there" check-in has already been sent
-  // for the current silence stretch — only a real user message clears
-  // this, so it isn't accidentally re-armed by the bot's own reply.
-  const checkedInRef = useRef(false);
-  const checkinAtRef = useRef<number | null>(null);
+  const checkedInAt10Ref = useRef(false);
+  const warnedAt30Ref = useRef(false);
+  const warnedTimestampRef = useRef<number | null>(null);
+  const signingOffRef = useRef(false);
   const loggingOutRef = useRef(false);
 
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -462,11 +469,14 @@ function VoiceExperienceInner({
     onMessage: ({ message, role }) => {
       if (role === "agent") setAssistantText(message);
       if (role === "user") {
-        // Any real word from the user drops the whole silence-escalation
-        // sequence — never mention the timer again once they're back.
+        // Any real word — even an interruption mid-answer — drops the
+        // whole silence-escalation sequence back to the start. Never
+        // mention any of it again once they're back.
         lastUserActivityRef.current = Date.now();
-        checkedInRef.current = false;
-        checkinAtRef.current = null;
+        checkedInAt10Ref.current = false;
+        warnedAt30Ref.current = false;
+        warnedTimestampRef.current = null;
+        signingOffRef.current = false;
       }
     },
     onError: (message) => {
@@ -500,36 +510,57 @@ function VoiceExperienceInner({
     }
   }, [conversation.status]);
 
-  // The real silence-escalation timer — a plain JS interval, not the
-  // agent's own sense of time (see the refs above for why). Every
-  // second: past 30s of no real user message, send one contextual
-  // nudge so the agent checks in and states the 30-second logout
-  // warning in its own words; past a further 30s with still nothing,
-  // enforce the logout directly in code rather than trusting the agent
-  // to call the tool on its own timing — this is what actually
-  // guarantees the "not a second early, not a second late" behavior a
-  // prompt-only approach couldn't.
+  // The real silence-escalation timer — a plain JS interval driving
+  // three fixed checkpoints, not the agent's own sense of time (see the
+  // refs above for why, and their comment for the exact stages). This
+  // is what actually guarantees precise timing a prompt-only approach
+  // couldn't.
   useEffect(() => {
     const interval = window.setInterval(() => {
-      if (loggingOutRef.current) return;
+      if (loggingOutRef.current || signingOffRef.current) return;
       if (conversation.status !== "connected" || phase === "submitting") return;
       if (lastUserActivityRef.current === null) return;
 
       const now = Date.now();
       const idleMs = now - lastUserActivityRef.current;
 
-      if (!checkedInRef.current && idleMs >= 30_000) {
-        checkedInRef.current = true;
-        checkinAtRef.current = now;
+      // Stage 1, 10s: a bare check-in, nothing about logging out yet.
+      if (!checkedInAt10Ref.current && idleMs >= 10_000) {
+        checkedInAt10Ref.current = true;
         conversationRef.current?.sendContextualUpdate(
-          "The user has been silent for 30 seconds. Check in on them right now, warmly and calmly, in one short sentence — something like \"Just checking, are you still there?\" — and mention that you'll need to log them out for security if there's no response in the next 30 seconds (reassure them anything already answered will be saved as a draft first). Speak now, don't wait for them."
+          "The user has been silent for 10 seconds. Check in on them right now, briefly and warmly, in one short sentence — just something like \"Just checking, are you still there?\" Nothing about logging out yet, that's not this step. Speak now."
         );
         return;
       }
 
-      if (checkedInRef.current && checkinAtRef.current !== null && now - checkinAtRef.current >= 30_000) {
-        loggingOutRef.current = true;
-        saveDraftAndLogout();
+      // Stage 2, 30s total: the real warning, and the start of the
+      // final 30s countdown to logout.
+      if (checkedInAt10Ref.current && !warnedAt30Ref.current && idleMs >= 30_000) {
+        warnedAt30Ref.current = true;
+        warnedTimestampRef.current = now;
+        conversationRef.current?.sendContextualUpdate(
+          "The user has now been silent for 30 seconds total. Tell them clearly and warmly, right now, in one or two short sentences: you'll need to log them out for security in 30 seconds if there's still no response, and anything they've already answered will be saved as a draft first so nothing is lost. Say this now, then stay completely quiet — don't say anything else at all until you hear from them or receive another note."
+        );
+        return;
+      }
+
+      // Stage 3, 60s total (30s after the warning): one short sign-off,
+      // then the app itself performs the logout a moment later — long
+      // enough for that line to actually finish playing before the page
+      // navigates away and the connection ends.
+      if (
+        warnedAt30Ref.current &&
+        warnedTimestampRef.current !== null &&
+        now - warnedTimestampRef.current >= 30_000
+      ) {
+        signingOffRef.current = true;
+        conversationRef.current?.sendContextualUpdate(
+          "The 30 seconds are up with still no response. Say one short final line right now — something like \"Logging you out now for security — see you next time!\" — then stop, nothing else."
+        );
+        window.setTimeout(() => {
+          loggingOutRef.current = true;
+          saveDraftAndLogout();
+        }, 3000);
       }
     }, 1000);
     return () => window.clearInterval(interval);

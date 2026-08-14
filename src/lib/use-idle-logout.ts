@@ -38,7 +38,20 @@ function warningWindowSeconds(totalSeconds: number): number {
   return Math.min(30, Math.max(3, Math.floor(totalSeconds / 3)));
 }
 
-const ACTIVITY_EVENTS = ["mousemove", "keydown", "click", "touchstart", "scroll"] as const;
+// Activity is voice, not mouse/keyboard — this app is meant to be run
+// hands-free, so someone actively talking with the ambient assistant
+// (or being spoken to by it) shouldn't get logged out just because their
+// hands never touched the mouse. A custom event rather than a shared
+// store/context, same reasoning as VOICE_PREFERENCE_CHANGED_EVENT in
+// voice-client.ts: the widget that hears the activity and this hook that
+// tracks it don't otherwise share a parent worth wiring a prop through.
+const VOICE_ACTIVITY_EVENT = "tericvoice:voice-activity";
+
+export function recordVoiceActivity(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(VOICE_ACTIVITY_EVENT));
+}
+
 const TICK_MS = 1000;
 
 /** Tracks user activity app-wide and auto-logs-out after N idle seconds
@@ -65,14 +78,8 @@ export function useIdleLogout() {
     // going through recordActivity, which the set-state-in-effect rule
     // rightly objects to being called synchronously from an effect body.
     lastActivityRef.current = Date.now();
-    for (const event of ACTIVITY_EVENTS) {
-      window.addEventListener(event, recordActivity, { passive: true });
-    }
-    return () => {
-      for (const event of ACTIVITY_EVENTS) {
-        window.removeEventListener(event, recordActivity);
-      }
-    };
+    window.addEventListener(VOICE_ACTIVITY_EVENT, recordActivity);
+    return () => window.removeEventListener(VOICE_ACTIVITY_EVENT, recordActivity);
   }, [recordActivity]);
 
   useEffect(() => {

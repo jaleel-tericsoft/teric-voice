@@ -32,6 +32,7 @@ import {
   withEmailResent,
 } from "@/lib/entries-store";
 import { performLogout } from "@/lib/logout";
+import { recordVoiceActivity } from "@/lib/use-idle-logout";
 import { consumePendingSubmissionAnnouncement } from "@/lib/submission-announcement";
 import { consumePendingInstructionsOffer } from "@/lib/instructions-offer";
 
@@ -432,11 +433,23 @@ function AmbientVoiceWidgetInner() {
       console.error("[ambient] agent session error", message);
       setConnectError(message);
     },
+    // Every real turn — the user's own speech transcribed, or the agent
+    // replying — counts as the "voice activity" the idle-logout timer
+    // resets on (see use-idle-logout.ts: this app runs hands-free, so
+    // mouse/keyboard were never the right signal for it).
+    onMessage: () => recordVoiceActivity(),
     clientTools,
   });
   useEffect(() => {
     conversationRef.current = conversation;
   }, [conversation]);
+
+  // Also covers the moment speech starts, slightly ahead of onMessage
+  // (which fires once a transcript is final) — the agent actively
+  // talking is itself activity, not just what it said afterward.
+  useEffect(() => {
+    if (conversation.mode === "speaking") recordVoiceActivity();
+  }, [conversation.mode]);
 
   // See connectAmbientSession's comment on why this is deferred to a
   // reactive "status just became connected" effect instead of running
